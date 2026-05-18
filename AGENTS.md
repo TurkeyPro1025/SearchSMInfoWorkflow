@@ -27,7 +27,7 @@ START ─┬→ search_tech_stocks ──┐
 
 ## 技能使用
 - 节点 `search_tech_stocks` / `search_hk_internet` / `search_commodities` / `search_market_events` 使用 Web Search 技能
-- 节点 `organize_news` 使用 大语言模型 技能（doubao-seed-2-0-lite-260215）
+- 节点 `organize_news` 使用 大语言模型 技能（百联平台：qwen-plus）
 - 节点 `write_feishu` 使用 飞书多维表格 集成
 
 ## 输入参数

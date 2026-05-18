@@ -1,9 +1,9 @@
 import json
 import logging
+from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
-from coze_coding_utils.runtime_ctx.context import Context
-from coze_coding_dev_sdk import SearchClient
+from tools.search_client import FallbackSearchClient
 from graphs.state import SearchBaseInput, SearchTechStocksOutput
 
 logger = logging.getLogger(__name__)
@@ -12,15 +12,14 @@ logger = logging.getLogger(__name__)
 def search_tech_stocks_node(
     state: SearchBaseInput,
     config: RunnableConfig,
-    runtime: Runtime[Context],
+    runtime: Runtime[Any],
 ) -> SearchTechStocksOutput:
     """
     title: 搜索科技股资讯
     desc: 搜索存储芯片、半导体、新能源等科技股细分领域的最新资讯，执行多轮关键词查询扩大采集范围
     integrations: Web Search
     """
-    ctx = runtime.context
-    client = SearchClient()
+    client = FallbackSearchClient()
 
     queries: list[str] = [
         "存储芯片 DRAM NAND 行情 涨价 2026",
@@ -36,18 +35,12 @@ def search_tech_stocks_node(
 
     for query in queries:
         try:
-            resp = client.search(query=query, search_type="web", count=10, need_content=True, time_range="1d")
-            items = resp.web_items if hasattr(resp, "web_items") else []
+            items = client.search(query=query, count=10, time_range="1d")
             for item in items:
-                title = getattr(item, "title", "") or ""
+                title = item.get("title", "") or ""
                 if title and title not in seen_titles:
                     seen_titles.add(title)
-                    all_results.append({
-                        "title": title,
-                        "snippet": getattr(item, "snippet", "") or "",
-                        "url": getattr(item, "url", "") or "",
-                        "content": getattr(item, "content", "") or "",
-                    })
+                    all_results.append(item)
         except Exception as e:
             logger.warning("科技股搜索失败 query=%s error=%s", query, e)
 

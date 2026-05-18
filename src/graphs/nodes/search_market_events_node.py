@@ -1,9 +1,9 @@
 import json
 import logging
+from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
-from coze_coding_utils.runtime_ctx.context import Context
-from coze_coding_dev_sdk import SearchClient
+from tools.search_client import FallbackSearchClient
 from graphs.state import SearchBaseInput, SearchMarketEventsOutput
 
 logger = logging.getLogger(__name__)
@@ -12,15 +12,14 @@ logger = logging.getLogger(__name__)
 def search_market_events_node(
     state: SearchBaseInput,
     config: RunnableConfig,
-    runtime: Runtime[Context],
+    runtime: Runtime[Any],
 ) -> SearchMarketEventsOutput:
     """
     title: 搜索市场震荡事件资讯
     desc: 搜索A股大盘、政策变动、地缘政治、黑天鹅事件等市场震荡相关资讯，多轮查询扩大采集范围
     integrations: Web Search
     """
-    ctx = runtime.context
-    client = SearchClient()
+    client = FallbackSearchClient()
 
     queries: list[str] = [
         "A股 大盘 震荡 行情分析 2026",
@@ -36,18 +35,12 @@ def search_market_events_node(
 
     for query in queries:
         try:
-            resp = client.search(query=query, search_type="web", count=10, need_content=True, time_range="1d")
-            items = resp.web_items if hasattr(resp, "web_items") else []
+            items = client.search(query=query, count=10, time_range="1d")
             for item in items:
-                title = getattr(item, "title", "") or ""
+                title = item.get("title", "") or ""
                 if title and title not in seen_titles:
                     seen_titles.add(title)
-                    all_results.append({
-                        "title": title,
-                        "snippet": getattr(item, "snippet", "") or "",
-                        "url": getattr(item, "url", "") or "",
-                        "content": getattr(item, "content", "") or "",
-                    })
+                    all_results.append(item)
         except Exception as e:
             logger.warning("市场震荡搜索失败 query=%s error=%s", query, e)
 

@@ -1,0 +1,18 @@
+﻿node.exe : {
+所在位置 H:\nodejs\lark-cli.ps1:16 字符: 5
++     & "$basedir/node$exe"  "$basedir/node_modules/@larksuite/cli/scri ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ({:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  "ok": false,
+  "identity": "user",
+  "error": {
+    "type": "api_error",
+    "code": 800004006,
+    "message": "param baseToken is invalid",
+    "detail": {
+      "logid": "20260518164253A0B718EFAB444A235FD0"
+    }
+  }
+}
