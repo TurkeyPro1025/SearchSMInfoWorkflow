@@ -51,7 +51,11 @@ __pycache__/
 # skill
 skills/
 .adal/
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/stock-news-workflow/
+!.agents/skills/stock-news-workflow/**
 .augment/
 .bob/
 .claude/
