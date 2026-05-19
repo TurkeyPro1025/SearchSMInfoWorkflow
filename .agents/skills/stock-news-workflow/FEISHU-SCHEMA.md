@@ -2,11 +2,13 @@
 
 **用户需自行在飞书 Base 中建好数据表并创建以下字段**，工作流只负责写入记录。
 
+默认执行身份：`--as user`
+
 ---
 
 ## 字段列表（11个）
 
-写入前建议先执行 `lark-cli base +field-list --base-token <app_token> --table-id <table_id>` 确认字段名与下表完全一致。
+写入前建议先执行 `lark-cli base +field-list --as user --base-token <base_token> --table-id <table_id>` 确认字段名与下表完全一致。
 
 | 字段名 | 类型 | 可选值 / 格式 |
 |---|---|---|
@@ -18,7 +20,7 @@
 | 来源 | 文本 | — |
 | 重要性 | 单选 | `高` / `中` / `低` |
 | 链接 | 超链接文本（style=url） | URL 字符串 |
-| 发布日期 | 日期 | `yyyy-MM-dd` |
+| 时间 | 日期 | `yyyy-MM-dd` |
 | 预测准确率 | 数字（百分比） | 小数，如 `0.75` 表示 75% |
 | 真实性评估 | 单选 | `高` / `中` / `低` |
 
@@ -36,7 +38,7 @@
 | `source` | 来源 | 直接使用 |
 | `importance` | 重要性 | "高"/"中"/"低" |
 | `url` | 链接 | URL 字符串 |
-| `publish_date` | 发布日期 | `"YYYY-MM-DD 00:00:00"` 格式（lark-cli datetime 格式）|
+| `publish_date` | 时间 | `"YYYY-MM-DD 00:00:00"` 格式（lark-cli datetime 格式）|
 | `prediction_accuracy` | 预测准确率 | 整数 → 除以100转为小数；`null` → `null` |
 | `authenticity.level` | 真实性评估 | "高"/"中"/"低" |
 
@@ -44,13 +46,13 @@
 
 ## 批量写入命令
 
-### 准备 records.json
+### 准备 src/storage/cache/records.batch-001.json
 
 将 LLM 输出的所有资讯条目转换为以下格式（每批 ≤ 200 条）：
 
 ```json
 {
-  "fields": ["领域", "标题", "行业", "内容摘要", "影响", "来源", "重要性", "链接", "发布日期", "预测准确率", "真实性评估"],
+  "fields": ["领域", "标题", "行业", "内容摘要", "影响", "来源", "重要性", "链接", "时间", "预测准确率", "真实性评估"],
   "rows": [
     ["科技股", "标题A", "存储芯片", "【原因】...【经过】...【结果】...【预测】...", "好", "财联社", "高", "https://...", "2026-05-18 00:00:00", 0.75, "高"],
     ["大宗商品", "标题B", "黄金", "...", "坏", "新浪财经", "中", "https://...", "2026-05-18 00:00:00", null, "中"]
@@ -64,16 +66,18 @@
 
 ```bash
 lark-cli base +record-batch-create \
-  --base-token <app_token> \
+  --as user \
+  --base-token <base_token> \
   --table-id <table_id> \
-  --json @records.json
+  --json "@./src/storage/cache/records.batch-001.json"
 ```
 
 或内联小批量（≤10条调试用）：
 
 ```bash
 lark-cli base +record-batch-create \
-  --base-token <app_token> \
+  --as user \
+  --base-token <base_token> \
   --table-id <table_id> \
   --json '{"fields":["领域","标题","影响"],"rows":[["科技股","测试标题","好"]]}'
 ```
@@ -88,6 +92,14 @@ for i in range(0, total, batch_size):
     写入一次 +record-batch-create
 ```
 
+### 写入前去重规则
+
+以“链接”字段的值为唯一键，按以下顺序去重：
+
+1. 先去掉当前待写入 `rows` 内部链接完全一致的重复项。
+2. 再读取目标表当前已有记录的“链接”字段，若链接值已存在，则跳过该行，不再写入。
+3. 若链接为空，视为无法参与唯一性判定，不建议保留；如必须保留，应由上游先补齐或显式接受风险。
+
 ---
 
 ## 字段值格式说明
@@ -96,6 +108,6 @@ for i in range(0, total, batch_size):
 |---|---|---|
 | 单选（领域/影响/重要性/真实性评估） | `"好"` 字符串 | `["好"]` 数组 |
 | 链接 | `"https://example.com"` 纯URL | `{"text":"标题","link":"https://..."}` |
-| 发布日期 | `"2026-05-18 00:00:00"` | `1747526400000`（Unix ms，lark-cli 不接受）|
+| 时间 | `"2026-05-18 00:00:00"` | `1747526400000`（Unix ms，lark-cli 不接受）|
 | 预测准确率 | `0.75` 小数 | `"75%"` 字符串 |
 | 空值 | `null` | `""` 空字符串（部分字段会报错）|

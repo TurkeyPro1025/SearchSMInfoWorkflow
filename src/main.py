@@ -101,6 +101,13 @@ class GraphService:
             yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
 
     async def run_node(self, node_id: str, payload: Dict[str, Any]) -> Any:
+        if node_id == "write_feishu":
+            from graphs.nodes.write_feishu_node import write_feishu_node
+            from graphs.state import WriteFeishuInput
+
+            node_input = WriteFeishuInput(**payload)
+            return write_feishu_node(node_input, {}, None)
+
         raise NotImplementedError(f"单节点运行暂未实现: {node_id}")
 
 
@@ -188,10 +195,13 @@ def parse_input(input_str: str) -> Dict[str, Any]:
         if payload is None:
             payload = {"text": input_str}
 
-    if "app_token" not in payload:
-        env_app_token = os.getenv("FEISHU_APP_TOKEN")
-        if env_app_token:
-            payload["app_token"] = env_app_token
+    if "base_token" not in payload and "app_token" in payload:
+        payload["base_token"] = payload["app_token"]
+
+    if "base_token" not in payload:
+        env_base_token = os.getenv("FEISHU_BASE_TOKEN")
+        if env_base_token:
+            payload["base_token"] = env_base_token
 
     if "table_id" not in payload:
         env_table_id = os.getenv("FEISHU_TABLE_ID")

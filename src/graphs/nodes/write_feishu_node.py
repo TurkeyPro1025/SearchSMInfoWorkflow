@@ -1,37 +1,21 @@
-import logging
-import json
 import datetime
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any, Dict, List
+
 from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
+
 from graphs.state import WriteFeishuInput, WriteFeishuOutput
-from tools.feishu_bitable import FeishuBitable
+from storage.cache.organized_news_cache import clear_organized_news_cache, load_organized_news_cache
 
 logger = logging.getLogger(__name__)
 
-# 飞书表格字段定义（用于 create_table 一次性创建完整字段结构）
-FIELD_DEFINITIONS: List[Dict[str, Any]] = [
-    {"field_name": "领域", "type": 3, "property": {"options": [
-        {"name": "科技股"}, {"name": "港股基金021378持仓"},
-        {"name": "大宗商品"}, {"name": "市场震荡"},
-    ]}},
-    {"field_name": "标题", "type": 1},
-    {"field_name": "行业", "type": 1},
-    {"field_name": "内容摘要", "type": 1},
-    {"field_name": "影响", "type": 3, "property": {"options": [
-        {"name": "好"}, {"name": "坏"},
-    ]}},
-    {"field_name": "来源", "type": 1},
-    {"field_name": "重要性", "type": 3, "property": {"options": [
-        {"name": "高"}, {"name": "中"}, {"name": "低"},
-    ]}},
-    {"field_name": "链接", "type": 15},
-    {"field_name": "发布日期", "type": 5, "property": {"date_format": "yyyy-MM-dd"}},
-    {"field_name": "预测准确率", "type": 2, "property": {"formatter": "0%"}},
-    {"field_name": "真实性评估", "type": 3, "property": {"options": [
-        {"name": "高"}, {"name": "中"}, {"name": "低"},
-    ]}},
-]
 
 FIELD_ALIASES: Dict[str, List[str]] = {
     "领域": ["领域"],
@@ -48,48 +32,91 @@ FIELD_ALIASES: Dict[str, List[str]] = {
 }
 
 
-def _get_current_timestamp_ms() -> int:
-    return int(datetime.datetime.now().timestamp() * 1000)
+class LarkCliUnavailableError(Exception):
+    pass
 
 
-def _get_today_start_ms() -> int:
-    """返回当天 00:00:00 的 Unix 毫秒时间戳，用于日期字段的兜底值。"""
-    today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    return int(today.timestamp() * 1000)
+def _resolve_lark_cli_executable() -> str:
+    candidates = ["lark-cli.cmd", "lark-cli.exe", "lark-cli"]
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise LarkCliUnavailableError("未找到 lark-cli，可执行文件不可用")
 
 
-def _parse_date_to_timestamp_ms(date_str: str, fallback_ms: int) -> int:
-    """
-    将日期字符串解析为 Unix 毫秒时间戳。
-    支持格式: YYYY-MM-DD, YYYY-MM-DD HH:MM:SS, YYYY-MM-DDTHH:MM:SS
-    解析失败时返回 fallback_ms。
-    """
-    if not date_str or not isinstance(date_str, str):
-        return fallback_ms
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
 
-    date_str = date_str.strip()
-    if not date_str:
-        return fallback_ms
 
-    formats = [
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
-    ]
-    for fmt in formats:
-        try:
-            dt = datetime.datetime.strptime(date_str, fmt)
-            return int(dt.timestamp() * 1000)
-        except ValueError:
-            continue
+def _cache_dir() -> Path:
+    return _project_root() / "src" / "storage" / "cache"
 
-    logger.warning("日期解析失败，使用写入日期: %s", date_str)
-    return fallback_ms
+
+def _get_base_token(state_token: str) -> str:
+    return os.getenv("FEISHU_BASE_TOKEN", "").strip() or (state_token or "").strip()
+
+
+def _extract_cli_json(stdout: str) -> Dict[str, Any]:
+    text = (stdout or "").strip()
+    if not text:
+        raise ValueError("lark-cli 未返回任何输出")
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise ValueError(f"lark-cli 输出中未找到 JSON: {text[:500]}")
+
+    return json.loads(text[start:end + 1])
+
+
+def _run_lark_cli_json(args: List[str]) -> Dict[str, Any]:
+    lark_cli_executable = _resolve_lark_cli_executable()
+
+    completed = subprocess.run(
+        [lark_cli_executable, *args],
+        cwd=_project_root(),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+
+    if completed.returncode != 0:
+        detail = stderr.strip() or stdout.strip() or f"exit_code={completed.returncode}"
+        raise RuntimeError(detail)
+
+    payload = _extract_cli_json(stdout)
+    if not payload.get("ok", False):
+        raise RuntimeError(json.dumps(payload, ensure_ascii=False))
+    return payload
+
+
+def _extract_link_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        link = value.get("link")
+        return str(link).strip() if link else ""
+    if isinstance(value, list):
+        for item in value:
+            link = _extract_link_value(item)
+            if link:
+                return link
+        return ""
+
+    text = str(value).strip()
+    if not text:
+        return ""
+
+    match = re.search(r"\((https?://[^)]+)\)$", text)
+    if match:
+        return match.group(1).strip()
+    return text
 
 
 def _parse_accuracy(value: Any) -> float:
-    """解析预测准确率，返回 0.0~1.0 之间的浮点数"""
     if isinstance(value, (int, float)):
         val = float(value)
         return val / 100.0 if val > 1.0 else val
@@ -103,9 +130,30 @@ def _parse_accuracy(value: Any) -> float:
     return 0.0
 
 
+def _format_cli_datetime(date_str: Any) -> str:
+    fallback_dt = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    if isinstance(date_str, str):
+        text = date_str.strip()
+        if text:
+            formats = [
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%dT%H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%d",
+            ]
+            for fmt in formats:
+                try:
+                    dt = datetime.datetime.strptime(text, fmt)
+                    if fmt == "%Y-%m-%d":
+                        dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                    return dt.strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    continue
+    return fallback_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _infer_industry(category: str, title: str, summary: str) -> str:
     text = f"{title} {summary}".lower()
-
     keyword_mapping = [
         ("存储", "存储芯片"),
         ("半导体", "半导体"),
@@ -159,7 +207,6 @@ def _normalize_impact(value: Any, title: str, summary: str) -> str:
 
 
 def _normalize_authenticity(value: Any) -> str:
-    """将真实性评估统一规范为飞书单选字段可用的值。"""
     if isinstance(value, dict):
         level = value.get("level", "")
         if isinstance(level, str):
@@ -172,7 +219,6 @@ def _normalize_authenticity(value: Any) -> str:
             publisher_authority = publisher_authority.strip()
             if publisher_authority in {"高", "中", "低"}:
                 return publisher_authority
-
         return "中"
 
     if isinstance(value, str):
@@ -183,80 +229,24 @@ def _normalize_authenticity(value: Any) -> str:
             return "中"
         if text.startswith("低"):
             return "低"
-
     return "中"
 
 
-def _flatten_organized_news(organized_news: Dict[str, Any], collect_timestamp_ms: int) -> List[Dict[str, Any]]:
-    """将分类整理后的资讯扁平化为飞书多维表格记录列表"""
-    records: List[Dict[str, Any]] = []
-    if not organized_news:
-        return records
-
-    for category, items in organized_news.items():
-        if category == "raw_data":
-            continue
-        if isinstance(items, list):
-            for item in items:
-                if isinstance(item, dict):
-                    title = item.get("title", "") or item.get("标题", "")
-                    industry = item.get("industry", "") or item.get("行业", "") or item.get("所属行业", "")
-                    summary = item.get("summary", "") or item.get("内容摘要", "") or item.get("摘要", "")
-                    impact = item.get("impact", "") or item.get("影响", "")
-                    source = item.get("source", "") or item.get("来源", "")
-                    importance = item.get("importance", "") or item.get("重要性", "中")
-                    url = item.get("url", "") or item.get("链接", "")
-                    publish_date_str = item.get("publish_date", "") or item.get("发布日期", "") or item.get("time", "")
-                    accuracy_raw = item.get("prediction_accuracy", "") or item.get("预测准确率", "")
-                    authenticity = item.get("authenticity", "") or item.get("真实性评估", "") or item.get("credibility", "")
-
-                    # 日期：优先使用发布日期，解析失败则用写入日期
-                    publish_ts = _parse_date_to_timestamp_ms(publish_date_str, collect_timestamp_ms)
-                    # 预测准确率：转为 0~1 浮点数
-                    accuracy_val = _parse_accuracy(accuracy_raw) if accuracy_raw else 0.0
-                    authenticity_value = _normalize_authenticity(authenticity)
-                    industry_value = str(industry).strip() if industry else _infer_industry(category, str(title), str(summary))
-                    impact_value = _normalize_impact(impact, str(title), str(summary))
-
-                    record_fields: Dict[str, Any] = {
-                        "领域": category,
-                        "标题": str(title) if title else "",
-                        "行业": industry_value,
-                        "内容摘要": str(summary) if summary else "",
-                        "影响": impact_value,
-                        "来源": str(source) if source else "",
-                        "重要性": str(importance) if importance else "中",
-                        "链接": {"link": str(url), "text": str(title) or str(url)} if url else {"link": "", "text": ""},
-                        "发布日期": publish_ts,
-                        "预测准确率": accuracy_val,
-                        "真实性评估": authenticity_value,
-                    }
-                    records.append({"fields": record_fields})
-                elif isinstance(item, str):
-                    records.append({"fields": {
-                        "领域": category, "标题": item, "行业": _infer_industry(category, item, ""), "内容摘要": "",
-                        "影响": _normalize_impact("", item, ""),
-                        "来源": "", "重要性": "中", "链接": {"link": "", "text": ""},
-                        "发布日期": collect_timestamp_ms, "预测准确率": 0.0,
-                        "真实性评估": "低",
-                    }})
-        elif isinstance(items, str):
-            records.append({"fields": {
-                "领域": category, "标题": items, "行业": _infer_industry(category, items, ""), "内容摘要": "",
-                "影响": _normalize_impact("", items, ""),
-                "来源": "", "重要性": "中", "链接": {"link": "", "text": ""},
-                "发布日期": collect_timestamp_ms, "预测准确率": 0.0,
-                "真实性评估": "低",
-            }})
-
-    return records
-
-
-def _resolve_field_name_map(bitable: FeishuBitable, app_token: str, table_id: str) -> Dict[str, str]:
+def _resolve_cli_field_name_map(base_token: str, table_id: str) -> Dict[str, str]:
+    payload = _run_lark_cli_json([
+        "base",
+        "+field-list",
+        "--as",
+        "user",
+        "--base-token",
+        base_token,
+        "--table-id",
+        table_id,
+    ])
     available_fields = {
-        item.get("field_name", "")
-        for item in bitable.list_fields(app_token=app_token, table_id=table_id).get("data", {}).get("items", [])
-        if item.get("field_name")
+        item.get("name", "")
+        for item in payload.get("data", {}).get("fields", [])
+        if item.get("name")
     }
 
     field_name_map: Dict[str, str] = {}
@@ -268,43 +258,188 @@ def _resolve_field_name_map(bitable: FeishuBitable, app_token: str, table_id: st
         else:
             if canonical_name in available_fields:
                 field_name_map[canonical_name] = canonical_name
-
     return field_name_map
 
 
-def _remap_record_fields(records: List[Dict[str, Any]], field_name_map: Dict[str, str]) -> List[Dict[str, Any]]:
-    remapped_records: List[Dict[str, Any]] = []
+def _fetch_existing_cli_links(base_token: str, table_id: str, link_field_name: str) -> set[str]:
+    existing_links: set[str] = set()
+    offset = 0
+    limit = 200
 
-    for record in records:
-        fields = record.get("fields", {})
-        remapped_fields: Dict[str, Any] = {}
-        for canonical_name, value in fields.items():
-            target_name = field_name_map.get(canonical_name)
-            if not target_name:
+    while True:
+        payload = _run_lark_cli_json([
+            "base",
+            "+record-list",
+            "--as",
+            "user",
+            "--base-token",
+            base_token,
+            "--table-id",
+            table_id,
+            "--field-id",
+            link_field_name,
+            "--offset",
+            str(offset),
+            "--limit",
+            str(limit),
+            "--format",
+            "json",
+        ])
+        data = payload.get("data", {})
+        for row in data.get("data", []):
+            if isinstance(row, list) and row:
+                link = _extract_link_value(row[0])
+                if link:
+                    existing_links.add(link)
+
+        if not data.get("has_more"):
+            break
+        offset += limit
+
+    return existing_links
+
+
+def _build_cli_rows(organized_news: Dict[str, Any], field_name_map: Dict[str, str]) -> List[List[Any]]:
+    rows: List[List[Any]] = []
+    canonical_order = [
+        "领域",
+        "标题",
+        "行业",
+        "内容摘要",
+        "影响",
+        "来源",
+        "重要性",
+        "链接",
+        "发布日期",
+        "预测准确率",
+        "真实性评估",
+    ]
+
+    def get_item_value(item: Dict[str, Any], *keys: str) -> Any:
+        for key in keys:
+            if key in item and item[key] not in (None, ""):
+                return item[key]
+        return ""
+
+    for category, items in organized_news.items():
+        if category == "raw_data" or not isinstance(items, list):
+            continue
+
+        for item in items:
+            if not isinstance(item, dict):
                 continue
-            remapped_fields[target_name] = value
-        remapped_records.append({"fields": remapped_fields})
 
-    return remapped_records
+            title = get_item_value(item, "title", "标题")
+            summary = get_item_value(item, "summary", "内容摘要", "摘要")
+            industry = get_item_value(item, "industry", "行业", "所属行业")
+            impact = get_item_value(item, "impact", "影响")
+            source = get_item_value(item, "source", "来源")
+            importance = get_item_value(item, "importance", "重要性") or "中"
+            url = get_item_value(item, "url", "链接")
+            publish_date = get_item_value(item, "publish_date", "发布日期", "time")
+            accuracy_raw = get_item_value(item, "prediction_accuracy", "预测准确率")
+            authenticity_raw = get_item_value(item, "authenticity", "真实性评估", "credibility")
+
+            canonical_values: Dict[str, Any] = {
+                "领域": category,
+                "标题": str(title) if title else "",
+                "行业": str(industry).strip() if industry else _infer_industry(category, str(title), str(summary)),
+                "内容摘要": str(summary) if summary else "",
+                "影响": _normalize_impact(impact, str(title), str(summary)),
+                "来源": str(source) if source else "",
+                "重要性": str(importance) if importance else "中",
+                "链接": str(url).strip() if url else None,
+                "发布日期": _format_cli_datetime(publish_date),
+                "预测准确率": None if accuracy_raw in (None, "") else _parse_accuracy(accuracy_raw),
+                "真实性评估": _normalize_authenticity(authenticity_raw),
+            }
+            rows.append([canonical_values[name] for name in canonical_order if field_name_map.get(name)])
+
+    return rows
 
 
-def _create_table_with_fields(bitable: FeishuBitable, app_token: str) -> str:
-    """
-    在已有 Base 中自动创建带完整字段的数据表。
-    返回新建表的 table_id。
-    """
-    today_str = datetime.datetime.now().strftime("%Y%m%d")
-    table_name = f"股市资讯_{today_str}"
-    logger.info("[write_feishu] 自动创建数据表: %s, 含 %d 个预定义字段", table_name, len(FIELD_DEFINITIONS))
+def _dedupe_cli_rows_by_link(rows: List[List[Any]], fields: List[str], existing_links: set[str]) -> List[List[Any]]:
+    if "链接" not in fields:
+        return rows
 
-    table_resp = bitable.create_table(app_token=app_token, table_name=table_name, fields=FIELD_DEFINITIONS)
-    table_data = table_resp.get("data", {})
-    table_id = table_data.get("table_id", "")
-    if not table_id:
-        raise Exception(f"创建数据表失败，未获取到 table_id: {table_resp}")
+    link_index = fields.index("链接")
+    deduped_rows: List[List[Any]] = []
+    seen_links = set(existing_links)
 
-    logger.info("[write_feishu] 数据表创建成功, table_id=%s", table_id)
-    return table_id
+    for row in rows:
+        link = _extract_link_value(row[link_index] if link_index < len(row) else None)
+        if link and link in seen_links:
+            continue
+        if link:
+            seen_links.add(link)
+        deduped_rows.append(row)
+
+    return deduped_rows
+
+
+def _write_records_with_lark_cli(base_token: str, table_id: str, organized_news: Dict[str, Any]) -> int:
+    field_name_map = _resolve_cli_field_name_map(base_token, table_id)
+    canonical_order = [
+        "领域",
+        "标题",
+        "行业",
+        "内容摘要",
+        "影响",
+        "来源",
+        "重要性",
+        "链接",
+        "发布日期",
+        "预测准确率",
+        "真实性评估",
+    ]
+    fields = [field_name_map[name] for name in canonical_order if field_name_map.get(name)]
+    rows = _build_cli_rows(organized_news, field_name_map)
+
+    link_field_name = field_name_map.get("链接")
+    if link_field_name:
+        existing_links = _fetch_existing_cli_links(base_token, table_id, link_field_name)
+        deduped_rows = _dedupe_cli_rows_by_link(rows, fields, existing_links)
+        logger.info(
+            "[write_feishu] 写入前按链接去重: 原始 %d 条, 去重后 %d 条, 已存在链接 %d 条",
+            len(rows),
+            len(deduped_rows),
+            len(existing_links),
+        )
+        rows = deduped_rows
+
+    if not rows:
+        return 0
+
+    cache_dir = _cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    batch_size = 200
+    total_written = 0
+    for batch_index, start in enumerate(range(0, len(rows), batch_size), start=1):
+        batch_rows = rows[start:start + batch_size]
+        payload_path = cache_dir / f"records.batch-{batch_index:03d}.json"
+        payload_path.write_text(
+            json.dumps({"fields": fields, "rows": batch_rows}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        relative_payload_path = f"@./{payload_path.relative_to(_project_root()).as_posix()}"
+        payload = _run_lark_cli_json([
+            "base",
+            "+record-batch-create",
+            "--as",
+            "user",
+            "--base-token",
+            base_token,
+            "--table-id",
+            table_id,
+            "--json",
+            relative_payload_path,
+        ])
+        created_rows = payload.get("data", {}).get("data", [])
+        total_written += len(created_rows) if isinstance(created_rows, list) else len(batch_rows)
+        logger.info("[write_feishu] lark-cli 批次%d写入成功，本批 %d 条", batch_index, len(batch_rows))
+
+    return total_written
 
 
 def write_feishu_node(
@@ -312,88 +447,51 @@ def write_feishu_node(
 ) -> WriteFeishuOutput:
     """
     title: 写入飞书多维表格
-    desc: 在已有 Base 中自动创建带完整字段的数据表（领域/标题/内容摘要/来源/重要性/链接/发布日期/预测准确率/真实性评估），并将整理后的股市资讯批量写入
+    desc: 使用 lark-cli(user) 从缓存或当前状态读取结构化资讯，按链接去重后批量写入飞书多维表格
     integrations: 飞书多维表格
     """
-    app_token = state.app_token
+    base_token = _get_base_token(state.base_token)
     table_id = (state.table_id or "").strip()
     organized_news = state.organized_news
 
-    if not app_token:
-        error_msg = "缺少必填参数 app_token，请提供飞书多维表格的 app_token"
-        logger.error("[write_feishu] %s", error_msg)
-        return WriteFeishuOutput(write_result=error_msg, app_token="", table_id="")
+    if not organized_news:
+        try:
+            organized_news = load_organized_news_cache()
+            if organized_news:
+                logger.info("[write_feishu] 当前输入无 organized_news，已从缓存加载待写入数据")
+        except Exception as e:
+            logger.warning("[write_feishu] 读取清洗结果缓存失败: %s", e)
 
-    # 初始化飞书客户端
-    try:
-        bitable = FeishuBitable()
-    except Exception as e:
-        error_msg = f"飞书客户端初始化失败: {e}"
+    if not base_token:
+        error_msg = "缺少可用的 base_token，请提供 FEISHU_BASE_TOKEN 或在输入中传入可复用的 token"
         logger.error("[write_feishu] %s", error_msg)
-        return WriteFeishuOutput(write_result=error_msg, app_token=app_token, table_id="")
+        return WriteFeishuOutput(write_result=error_msg, base_token="", table_id=table_id)
 
-    # ========== 自动创建数据表（如果未提供 table_id）==========
     if not table_id:
-        try:
-            table_id = _create_table_with_fields(bitable, app_token)
-            logger.info("[write_feishu] 自动创建数据表成功: table_id=%s", table_id)
-        except Exception as e:
-            error_msg = f"自动创建数据表失败: {e}"
-            logger.error("[write_feishu] %s", error_msg)
-            return WriteFeishuOutput(write_result=error_msg, app_token=app_token, table_id="")
-    else:
-        logger.info("[write_feishu] 使用现有数据表: table_id=%s", table_id)
-
-    # ========== 转换资讯数据为飞书记录 ==========
-    collect_timestamp_ms = _get_today_start_ms()
-    records = _flatten_organized_news(organized_news, collect_timestamp_ms)
-    if not records:
-        logger.info("[write_feishu] 无有效资讯可写入")
-        return WriteFeishuOutput(
-            write_result="本次无新资讯需写入飞书多维表格",
-            app_token=app_token, table_id=table_id
-        )
-
-    logger.info("[write_feishu] 准备写入 %d 条记录 (app_token=%s, table_id=%s)", len(records), app_token, table_id)
-    if records:
-        logger.info("[write_feishu] 第一条记录示例: %s", json.dumps(records[0], ensure_ascii=False))
+        error_msg = "缺少必填参数 table_id；CLI 写入路径不再负责自动建表"
+        logger.error("[write_feishu] %s", error_msg)
+        return WriteFeishuOutput(write_result=error_msg, base_token=base_token, table_id="")
 
     try:
-        field_name_map = _resolve_field_name_map(bitable, app_token, table_id)
-        records = _remap_record_fields(records, field_name_map)
-        logger.info("[write_feishu] 字段映射: %s", json.dumps(field_name_map, ensure_ascii=False))
-    except Exception as e:
-        error_msg = f"获取飞书字段映射失败: {e}"
+        total_written = _write_records_with_lark_cli(base_token, table_id, organized_news)
+    except LarkCliUnavailableError as e:
+        error_msg = f"lark-cli 不可用，无法写入飞书: {e}"
         logger.error("[write_feishu] %s", error_msg)
-        return WriteFeishuOutput(write_result=error_msg, app_token=app_token, table_id=table_id)
+        return WriteFeishuOutput(write_result=error_msg, base_token=base_token, table_id=table_id)
+    except Exception as e:
+        error_msg = f"通过 lark-cli(user) 写入飞书失败: {e}"
+        logger.error("[write_feishu] %s", error_msg)
+        return WriteFeishuOutput(write_result=error_msg, base_token=base_token, table_id=table_id)
 
-    # ========== 批量写入记录 ==========
-    batch_size = 500
-    total_written: int = 0
-    error_messages: List[str] = []
-
-    for i in range(0, len(records), batch_size):
-        batch = records[i: i + batch_size]
-        try:
-            resp_data = bitable.add_records(app_token=app_token, table_id=table_id, records=batch)
-            created_records = resp_data.get("data", {}).get("records", [])
-            total_written += len(created_records)
-            logger.info("[write_feishu] 批次%d写入成功，本批 %d 条", i // batch_size + 1, len(created_records))
-        except Exception as e:
-            err = f"批次{i // batch_size + 1}写入失败: {e}"
-            logger.error("[write_feishu] %s", err)
-            error_messages.append(err)
-
-    if total_written == 0 and error_messages:
-        result_msg = f"写入飞书多维表格失败 (app_token={app_token}, table_id={table_id}): {'; '.join(error_messages)}"
+    if total_written == 0:
+        result_msg = "本次无新资讯需写入飞书多维表格"
     else:
-        result_msg = f"成功写入飞书多维表格 {total_written} 条资讯记录 (app_token={app_token}, table_id={table_id})"
-        if error_messages:
-            result_msg += f"，部分失败: {'; '.join(error_messages)}"
+        result_msg = f"成功通过 lark-cli(user) 写入飞书多维表格 {total_written} 条资讯记录 (base_token={base_token}, table_id={table_id})"
+        try:
+            clear_organized_news_cache()
+            logger.info("[write_feishu] 写入成功，已清理清洗结果缓存")
+        except Exception as e:
+            logger.warning("[write_feishu] 清理清洗结果缓存失败: %s", e)
 
     logger.info("[write_feishu] %s", result_msg)
-    return WriteFeishuOutput(
-        write_result=result_msg,
-        app_token=app_token,
-        table_id=table_id
-    )
+    return WriteFeishuOutput(write_result=result_msg, base_token=base_token, table_id=table_id)

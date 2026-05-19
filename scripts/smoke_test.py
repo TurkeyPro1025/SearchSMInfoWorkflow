@@ -2,13 +2,15 @@
 冒烟测试：验证本地替换后三个核心环节均可正常调用
   1. FallbackSearchClient - 搜索单条资讯
   2. ChatOpenAI           - LLM 一问一答
-  3. FeishuBitable        - 获取 tenant_access_token
+    3. lark-cli             - 飞书 CLI 鉴权与 Base 只读检查
 
 运行方式（在项目根目录）:
   uv run python scripts/smoke_test.py
 """
 
 import os
+import shutil
+import subprocess
 import sys
 
 # 把 src 加入路径
@@ -55,23 +57,48 @@ except Exception as e:
     _fail("LLM 调用失败", e)
 
 
-# ─── 3. 飞书 token ──────────────────────────────────────────────
-print("\n[3/3] Feishu tenant_access_token")
+# ─── 3. 飞书 CLI ────────────────────────────────────────────────
+print("\n[3/3] lark-cli Feishu auth")
 try:
-    import requests
-    app_id = os.environ["FEISHU_APP_ID"]
-    app_secret = os.environ["FEISHU_APP_SECRET"]
-    resp = requests.post(
-        "https://open.larkoffice.com/open-apis/auth/v3/tenant_access_token/internal",
-        json={"app_id": app_id, "app_secret": app_secret},
-        timeout=10,
+    if shutil.which("lark-cli") is None:
+        raise RuntimeError("未找到 lark-cli")
+
+    status = subprocess.run(
+        ["lark-cli", "auth", "status"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
     )
-    data = resp.json()
-    if data.get("code") != 0:
-        raise RuntimeError(data)
-    token = data["tenant_access_token"]
-    _ok(f"token 获取成功（前16位）: {token[:16]}…")
+    if status.returncode != 0:
+        raise RuntimeError(status.stderr.strip() or status.stdout.strip() or "auth status 失败")
+
+    base_token = os.environ.get("FEISHU_BASE_TOKEN", "").strip()
+    table_id = os.environ.get("FEISHU_TABLE_ID", "").strip()
+    if base_token and table_id:
+        fields = subprocess.run(
+            [
+                "lark-cli",
+                "base",
+                "+field-list",
+                "--as",
+                "user",
+                "--base-token",
+                base_token,
+                "--table-id",
+                table_id,
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=20,
+        )
+        if fields.returncode != 0:
+            raise RuntimeError(fields.stderr.strip() or fields.stdout.strip() or "field-list 失败")
+        _ok("lark-cli 鉴权可用，且可读取目标 Base 字段")
+    else:
+        _ok("lark-cli 鉴权可用；未提供 FEISHU_BASE_TOKEN 或 FEISHU_TABLE_ID，跳过 Base 只读检查")
 except Exception as e:
-    _fail("飞书 token 获取失败", e)
+    _fail("飞书 CLI 检查失败", e)
 
 print()

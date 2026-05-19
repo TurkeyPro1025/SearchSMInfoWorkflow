@@ -26,17 +26,34 @@ OPENAI_BASE_URL=           # OpenAI 兼容服务地址（如网关地址）
 # 飞书应用配置
 FEISHU_APP_ID=             # 飞书应用 App ID（cli_xxx）
 FEISHU_APP_SECRET=         # 飞书应用 App Secret
-FEISHU_APP_TOKEN=          # 多维表格 Base 的 app_token
+FEISHU_BASE_TOKEN=         # 用于 lark-cli base +... / base/v3/bases/:base_token 的 base_token
 FEISHU_TABLE_ID=           # 目标数据表 table_id（tbl_xxx）
-
-# 飞书用户授权（可选，推荐）
-FEISHU_USER_ACCESS_TOKEN=  # 用户访问令牌（可由 refresh token 自动刷新）
-FEISHU_USER_REFRESH_TOKEN= # 用户刷新令牌
 
 # 项目运行环境
 COZE_WORKSPACE_PATH=       # 本地工作区路径
 COZE_PROJECT_ENV=          # 环境标识（如 dev/test/prod）
 ```
+
+补充说明：
+
+- 当前项目与飞书 Base 的交互只走 `lark-cli base +...`，运行时只需要 `FEISHU_BASE_TOKEN` 和 `FEISHU_TABLE_ID`。
+- 旧的 Python OpenAPI 写入支路已经移除，README 中不再把 `app_token` 作为工作流输入前提。
+
+### 为什么会出现 `param baseToken is invalid`
+
+这类报错多数不是权限问题，而是把旧接口里的 `app_token` 误传给了要求 `base_token` 的 CLI / Base v3 接口。
+
+- 飞书官方在多维表格 `bitable/v1` 文档中，将路径参数定义为 `app_token`，例如 `GET /open-apis/bitable/v1/apps/:app_token`。
+- 飞书 CLI 的 `lark-cli base +...` 命令走的是另一套接口，即 `base/v3`，例如 `GET /open-apis/base/v3/bases/:base_token`。
+- 因此，一个 token 能在 `bitable/v1/apps/:app_token/...` 下使用，不代表它也能作为 `base/v3/bases/:base_token/...` 的参数使用。
+- 飞书官方产品名现在叫 Base，但旧接口与旧文档里仍大量保留 Bitable 命名；两套接口并存时，最容易踩坑的地方就是把 `app_token` 和 `base_token` 当成同一个值。
+
+快速判断规则：
+
+- 看到 `base/v3/bases/...`，使用 `FEISHU_BASE_TOKEN`。
+- 看到 `lark-cli base +...`，默认按 `base/v3` 理解，优先传 `FEISHU_BASE_TOKEN`。
+
+如果你已经确认用户身份授权正常，但 `lark-cli base +field-list`、`+record-list`、`+base-get` 仍报 `param baseToken is invalid`，优先排查是否传错了 token 类型，而不是先怀疑 scope。
 
 ## 工作流梳理（含 LLM/工具）
 
@@ -58,7 +75,7 @@ flowchart LR
     D --> F
     E --> F
 
-    F --> G["write_feishu<br/>工具: FeishuBitable - OpenAPI"]
+    F --> G["write_feishu<br/>工具: lark-cli base --as user"]
     G --> H["END"]
 ```
 
@@ -71,7 +88,7 @@ flowchart LR
 | search_commodities | 抓取大宗商品资讯 | FallbackSearchClient（Web Search） |
 | search_market_events | 抓取市场震荡事件资讯 | FallbackSearchClient（Web Search） |
 | organize_news | 分类、去重、结构化摘要、真实性与预测评估 | LLM: qwen-plus（配置文件: config/organize_news_llm_cfg.json）+ ChatOpenAI |
-| write_feishu | 字段映射、自动建表（可选）、批量写入多维表格 | FeishuBitable（飞书 OpenAPI 客户端） |
+| write_feishu | 字段对齐、按链接去重、批量写入多维表格 | lark-cli base（`--as user`） |
 
 # 本地运行
 ## 运行流程
@@ -101,33 +118,25 @@ Windows 启动 HTTP 服务：
 .\scripts\run_flow.ps1 -Mode http -Port 5000
 ```
 
-## 飞书用户授权排查
+## 飞书 CLI 鉴权排查
 
-生成授权链接：
-
-```bash
-python scripts/feishu_user_auth.py --redirect-uri http://127.0.0.1:8000/callback
-```
-
-若浏览器提示 `127.0.0.1 拒绝连接`，说明本地没有监听回调端口。可直接让脚本启动本地回调服务并自动打开浏览器：
+当前项目运行前，先确认本机 `lark-cli` 已登录且默认身份可用：
 
 ```bash
-python scripts/feishu_user_auth.py --redirect-uri http://127.0.0.1:8000/callback --listen --open-browser --print-env
+lark-cli auth status
 ```
 
-授权成功后，浏览器会显示“可以关闭此页面”，终端会继续输出 token 交换结果。
-
-拿到回调中的 `code` 后换取用户 token：
+若未登录或身份失效，重新登录：
 
 ```bash
-python scripts/feishu_user_auth.py --redirect-uri http://127.0.0.1:8000/callback --code <AUTH_CODE> --print-env
+lark-cli auth login --recommend
 ```
 
-拿到 `FEISHU_USER_ACCESS_TOKEN` / `FEISHU_USER_REFRESH_TOKEN` 后，可继续用探针脚本验证当前是否已经切到用户身份：
+登录后可先做只读检查，确认 `base_token` 与 `table_id` 可用：
 
 ```bash
-python scripts/feishu_bitable_probe.py --app-token <APP_TOKEN> --table-id <TABLE_ID> --probe-write
+lark-cli base +field-list --as user --base-token "$FEISHU_BASE_TOKEN" --table-id "$FEISHU_TABLE_ID"
 ```
 
-当前项目已支持使用 `FEISHU_USER_REFRESH_TOKEN` 自动刷新并回写新的用户 token；首次完成授权后，后续执行 [scripts/run_flow.ps1](scripts/run_flow.ps1) 即可，无需每次重新授权。
+若该命令可正常返回字段列表，说明当前 CLI 身份与目标 Base 已可用于工作流写入。
 

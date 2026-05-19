@@ -8,6 +8,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.runtime import Runtime
 from langchain_openai import ChatOpenAI
 from graphs.state import OrganizeNewsInput, OrganizeNewsOutput
+from storage.cache.organized_news_cache import save_organized_news_cache
 
 logger = logging.getLogger(__name__)
 
@@ -125,5 +126,11 @@ def organize_news_node(
     except (json.JSONDecodeError, ValueError) as e:
         logger.warning("[organize_news] JSON解析失败: %s，将原始文本存入raw_data", e)
         organized_news = {"raw_data": raw_text}
+
+    try:
+        cache_path = save_organized_news_cache(organized_news)
+        logger.info("[organize_news] 已写入清洗结果缓存: %s", cache_path)
+    except Exception as e:
+        logger.warning("[organize_news] 写入清洗结果缓存失败: %s", e)
 
     return OrganizeNewsOutput(organized_news=organized_news)

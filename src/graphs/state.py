@@ -1,18 +1,24 @@
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 # ==================== 全局状态 ====================
 
 class GlobalState(BaseModel):
     """工作流全局状态"""
+    model_config = ConfigDict(populate_by_name=True)
+
     tech_stocks_news: str = Field(default="", description="科技股搜索结果原始文本")
     hk_internet_news: str = Field(default="", description="港股基金021378持仓公司搜索结果原始文本")
     commodities_news: str = Field(default="", description="大宗商品搜索结果原始文本")
     market_events_news: str = Field(default="", description="市场震荡事件搜索结果原始文本")
     organized_news: Dict[str, Any] = Field(default={}, description="按领域分类整理后的资讯数据")
-    app_token: str = Field(default="", description="飞书多维表格的 app_token（为空时自动创建）")
-    table_id: str = Field(default="", description="飞书多维表格的 table_id（为空时自动创建）")
+    base_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("base_token", "app_token"),
+        description="飞书 Base token；优先使用环境变量 FEISHU_BASE_TOKEN",
+    )
+    table_id: str = Field(default="", description="飞书多维表格的 table_id（CLI 写入必填）")
     write_result: str = Field(default="", description="飞书写入结果信息")
 
 
@@ -20,15 +26,23 @@ class GlobalState(BaseModel):
 
 class GraphInput(BaseModel):
     """工作流输入参数"""
-    app_token: str = Field(..., description="飞书多维表格的 app_token（必填，在已有 Base 中自动创建数据表）")
-    table_id: str = Field(default="", description="飞书多维表格的 table_id（为空时自动创建带完整字段的数据表）")
+    model_config = ConfigDict(populate_by_name=True)
+
+    base_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("base_token", "app_token"),
+        description="飞书 Base token；优先使用环境变量 FEISHU_BASE_TOKEN",
+    )
+    table_id: str = Field(default="", description="飞书多维表格的 table_id（CLI 写入必填）")
 
 
 class GraphOutput(BaseModel):
     """工作流输出结果"""
+    model_config = ConfigDict(populate_by_name=True)
+
     organized_news: Dict[str, Any] = Field(default={}, description="按领域分类整理后的资讯数据")
     write_result: str = Field(default="", description="飞书写入结果信息")
-    app_token: str = Field(default="", description="使用的飞书多维表格 app_token")
+    base_token: str = Field(default="", description="本次写入使用的 base_token")
     table_id: str = Field(default="", description="使用的飞书多维表格 table_id")
 
 
@@ -78,13 +92,21 @@ class OrganizeNewsOutput(BaseModel):
 
 class WriteFeishuInput(BaseModel):
     """飞书多维表格写入节点输入"""
-    app_token: str = Field(..., description="飞书多维表格的 app_token（必填）")
-    table_id: str = Field(default="", description="飞书多维表格的 table_id（为空时自动创建数据表）")
+    model_config = ConfigDict(populate_by_name=True)
+
+    base_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("base_token", "app_token"),
+        description="飞书 Base token；优先使用环境变量 FEISHU_BASE_TOKEN",
+    )
+    table_id: str = Field(default="", description="飞书多维表格的 table_id（CLI 写入必填）")
     organized_news: Dict[str, Any] = Field(default={}, description="按领域分类整理后的资讯数据")
 
 
 class WriteFeishuOutput(BaseModel):
     """飞书多维表格写入节点输出"""
+    model_config = ConfigDict(populate_by_name=True)
+
     write_result: str = Field(..., description="飞书写入结果信息")
-    app_token: str = Field(default="", description="使用的飞书多维表格 app_token")
+    base_token: str = Field(default="", description="本次写入使用的 base_token")
     table_id: str = Field(default="", description="使用的飞书多维表格 table_id")
