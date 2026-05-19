@@ -12,7 +12,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.runtime import Runtime
 
 from graphs.state import WriteFeishuInput, WriteFeishuOutput
-from storage.cache.organized_news_cache import clear_organized_news_cache, load_organized_news_cache
+from storage.cache.organized_news_cache import load_organized_news_cache
 
 logger = logging.getLogger(__name__)
 
@@ -487,11 +487,6 @@ def write_feishu_node(
         result_msg = "本次无新资讯需写入飞书多维表格"
     else:
         result_msg = f"成功通过 lark-cli(user) 写入飞书多维表格 {total_written} 条资讯记录 (base_token={base_token}, table_id={table_id})"
-        try:
-            clear_organized_news_cache()
-            logger.info("[write_feishu] 写入成功，已清理清洗结果缓存")
-        except Exception as e:
-            logger.warning("[write_feishu] 清理清洗结果缓存失败: %s", e)
 
     logger.info("[write_feishu] %s", result_msg)
     return WriteFeishuOutput(write_result=result_msg, base_token=base_token, table_id=table_id)

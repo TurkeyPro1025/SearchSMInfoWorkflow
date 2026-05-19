@@ -45,10 +45,9 @@ COZE_PROJECT_ENV=          # 环境标识（如 dev/test/prod）
 
 - 飞书官方在多维表格 `bitable/v1` 文档中，将路径参数定义为 `app_token`，例如 `GET /open-apis/bitable/v1/apps/:app_token`。
 - 飞书 CLI 的 `lark-cli base +...` 命令走的是另一套接口，即 `base/v3`，例如 `GET /open-apis/base/v3/bases/:base_token`。
-- 因此，一个 token 能在 `bitable/v1/apps/:app_token/...` 下使用，不代表它也能作为 `base/v3/bases/:base_token/...` 的参数使用。
 - 飞书官方产品名现在叫 Base，但旧接口与旧文档里仍大量保留 Bitable 命名；两套接口并存时，最容易踩坑的地方就是把 `app_token` 和 `base_token` 当成同一个值。
+- 对于 `base_token` 需要通过 `https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node` 获取，其中的 `obj_token` 就是 `base_token`。
 
-快速判断规则：
 
 - 看到 `base/v3/bases/...`，使用 `FEISHU_BASE_TOKEN`。
 - 看到 `lark-cli base +...`，默认按 `base/v3` 理解，优先传 `FEISHU_BASE_TOKEN`。

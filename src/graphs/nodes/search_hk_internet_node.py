@@ -15,7 +15,6 @@ HOLDINGS: list[str] = [
     "金蝶国际", "哔哩哔哩-W",
 ]
 
-
 def search_hk_internet_node(
     state: SearchBaseInput,
     config: RunnableConfig,
@@ -29,12 +28,12 @@ def search_hk_internet_node(
     client = FallbackSearchClient()
 
     queries: list[str] = [
-        "港股 互联网科技 腾讯 阿里 美团 小米 最新消息 2026",
-        "港股通互联网指数 021378 持仓 重仓股 行情",
-        "腾讯控股 财报 业绩 回购 最新动态",
-        "阿里巴巴-W 京东健康 快手 商汤 2026",
-        "港股 科网股 南向资金 持仓变动 2026",
-        "小米集团 哔哩哔哩 金蝶国际 贝壳 最新消息",
+        "港股 互联网科技 腾讯 阿里 美团 小米 财报 指引 最新",
+        "021378 港股通互联网指数 重仓股 涨跌 驱动 最新",
+        "腾讯控股 回购 游戏 广告 视频号 财报 最新",
+        "阿里巴巴 美团 京东健康 快手 商汤 业务 数据 最新",
+        "港股 科网股 南向资金 回购估值 机构观点 最新",
+        "小米 贝壳 金蝶 哔哩哔哩 用户增长 盈利 预期 最新",
     ]
 
     all_results: list[dict] = []

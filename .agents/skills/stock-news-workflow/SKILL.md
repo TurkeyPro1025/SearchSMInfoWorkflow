@@ -1,6 +1,6 @@
 ---
 name: stock-news-workflow
-version: 1.2.0
+version: 1.3.0
 description: "股市资讯定时抓取整理工作流：并行搜索科技股、港股基金021378持仓、大宗商品、市场震荡四个领域的最新资讯，经 LLM 结构化整理后批量写入用户指定的飞书多维表格。当用户说「抓取股市资讯」「运行股票新闻工作流」「更新飞书股市表格」「整理今日资讯」时触发。"
 metadata:
   requires:
@@ -77,19 +77,21 @@ LLM 输出格式：`{"科技股": [...], "港股基金021378持仓": [...], "大
 1. system prompt 与 user prompt 模板必须来自本 skill 附件文档，不临时改字段。
 2. 若首轮返回非 JSON：仅重试一次，并附加约束“只返回合法 JSON”。
 3. 解析后仅保留四个领域 key：科技股、港股基金021378持仓、大宗商品、市场震荡。
-4. 输出统一落盘到 `src/storage/cache/organized_news_cache.json`，格式为 `{"organized_news": {...}}`。
-5. 缓存文件建议同时写入 `updated_at`，用于标记本次 LLM 整理完成时间。
-6. 飞书写入失败时保留该缓存；写入全部成功后清理该缓存。
+4. 搜索结果在进入 LLM 前只做去重与字段压缩，不按条数裁剪；去重后的消息都应保留并传给 LLM。
+5. 将新的 LLM 结果写入缓存前，先清空现有缓存中的 `organized_news`，再写入新的 `organized_news` 到 `src/storage/cache/organized_news_cache.json`。
+6. 缓存文件建议同时写入 `updated_at`，用于标记本次 LLM 整理完成时间。
+7. Step 3 只负责读取并写入飞书，不再在写入成功后清空缓存；缓存刷新时机统一放在下一次 Step 2 写入新结果之前。
+8. 输出后校验若发现潜在误合并，只通过日志提醒即可；日志需至少包含领域和对应的两条标题，供用户手动在飞书中处理。
 
 ### 缓存生命周期（强约束）
 
 `organized_news_cache.json` 是 Step 2 与 Step 3 之间的唯一重试依据，处理规则如下：
 
-1. LLM 成功输出并通过 JSON 结构校验后，立即覆盖写入 `src/storage/cache/organized_news_cache.json`。
+1. LLM 成功输出并通过 JSON 结构校验后，先清空现有缓存中的 `organized_news`，再立即写入新的 `src/storage/cache/organized_news_cache.json`。
 2. 若当前新路径不存在，可兼容读取旧路径 `assets/workflow/organized_news_cache.json`；但后续新写入必须统一写到新路径。
 3. Step 3 启动时，若内存中没有 `organized_news`，优先从 `src/storage/cache/organized_news_cache.json` 读取，不重新触发 Web Search 或 LLM。
 4. 若字段校验失败、CLI 写入失败、用户认证失败、网络失败，必须保留缓存文件，供后续直接重试写入。
-5. 只有当全部批次写入成功后，才允许删除 `src/storage/cache/organized_news_cache.json`。
+5. Step 3 无论成功还是失败，都不主动清空 `src/storage/cache/organized_news_cache.json`；缓存刷新只发生在下一次 Step 2 写入新 LLM 结果之前。
 6. 若是部分批次成功、部分批次失败，视为整体未完成，缓存必须保留。
 7. 若用户明确要求“只用缓存重试写入”，则直接跳过 Step 1 和 Step 2，基于缓存生成 `records.batch-00N.json` 并执行 CLI 写入。
 
@@ -124,7 +126,7 @@ lark-cli base +field-list --as user --base-token <base_token> --table-id <table_
 6. 执行前优先读取缓存中的 `organized_news`，不要重新组织数据；仅在缓存不存在时才视为无法重试。
 7. 若用户要求测试写入，仅生成并写入 1 条假数据，不执行全量写入。
 8. 若用户已明确要求使用 user 身份，任何 401/403/refresh 失败都应终止并提示重新执行 `lark-cli auth login`，不要静默切换身份。
-9. 全部批次成功后清理 `src/storage/cache/organized_news_cache.json`；只要存在失败批次，就保留缓存文件。
+9. 全部批次成功后清空 `src/storage/cache/organized_news_cache.json` 中的 `organized_news`；只要存在失败批次，就保留缓存文件内容。
 
 ## 输出交付
 
@@ -146,5 +148,5 @@ lark-cli base +field-list --as user --base-token <base_token> --table-id <table_
 | 字段写入被忽略 | 用 `lark-cli base +field-list` 确认字段名与 FEISHU-SCHEMA.md 一致 |
 | 反复写入同一批资讯 | 写入前先按“链接”去重，并过滤飞书表里已存在的相同链接 |
 | 想直接重试写入 | 直接复用 `src/storage/cache/organized_news_cache.json` 重新生成 `records.batch-00N.json` 并执行 `+record-batch-create --as user`；不要重新跑 Web Search / LLM |
-| 缓存文件不见了 | 说明上次流程已完整成功或被手动删除；若要重试写入，需先恢复 `src/storage/cache/organized_news_cache.json` |
+| 缓存文件存在但内容为空 | 说明新一轮 LLM 结果写入前已先清空旧缓存，或被手动清空；若要重试写入，需先恢复 `organized_news` 内容 |
 | 执行中出现 Python 调试脚本 | 删除临时脚本，回到纯 CLI/Skill 链路 |

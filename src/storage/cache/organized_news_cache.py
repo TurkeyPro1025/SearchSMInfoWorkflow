@@ -16,13 +16,17 @@ def get_organized_news_cache_path() -> Path:
     return Path(__file__).with_name("organized_news_cache.json")
 
 
-def save_organized_news_cache(organized_news: Dict[str, Any]) -> Path:
-    cache_path = get_organized_news_cache_path()
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+def _build_cache_payload(organized_news: Dict[str, Any]) -> Dict[str, Any]:
+    return {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "organized_news": organized_news,
     }
+
+
+def save_organized_news_cache(organized_news: Dict[str, Any]) -> Path:
+    cache_path = get_organized_news_cache_path()
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _build_cache_payload(organized_news)
     cache_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -44,10 +48,7 @@ def load_organized_news_cache() -> Dict[str, Any]:
 
 
 def clear_organized_news_cache() -> None:
-    payload = {
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "organized_news": {},
-    }
+    payload = _build_cache_payload({})
 
     for cache_path in (get_organized_news_cache_path(), _legacy_cache_path()):
         if cache_path.exists():
