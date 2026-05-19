@@ -2,6 +2,8 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import urlparse
+
 from jinja2 import Template
 from langchain_core.runnables import RunnableConfig
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -14,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 # 允许的领域列表，不允许修改
 ALLOWED_CATEGORIES = {"科技股", "港股基金021378持仓", "大宗商品", "市场震荡"}
+MAX_CANDIDATES_PER_CATEGORY = 12
+MAX_TITLE_CHARS = 80
+MAX_SNIPPET_CHARS = 180
+MAX_CONTENT_CHARS = 220
+MAX_FALLBACK_TEXT_CHARS = 3000
 
 
 def _resolve_cfg_path(cfg_path: str) -> Path:
@@ -43,6 +50,88 @@ def _get_text_content(content: Any) -> str:
     return str(content)
 
 
+def _normalize_text(value: Any) -> str:
+    text = str(value or "")
+    return " ".join(text.split())
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def _domain_hint(url: str) -> str:
+    hostname = urlparse(url).netloc.lower().removeprefix("www.")
+    return hostname
+
+
+def _compress_news_payload(raw_text: str) -> str:
+    normalized = _normalize_text(raw_text)
+    if not normalized:
+        return ""
+
+    try:
+        parsed = json.loads(raw_text)
+    except (json.JSONDecodeError, TypeError):
+        return _truncate_text(normalized, MAX_FALLBACK_TEXT_CHARS)
+
+    if not isinstance(parsed, list):
+        return _truncate_text(normalized, MAX_FALLBACK_TEXT_CHARS)
+
+    compact_items: List[Dict[str, Any]] = []
+    seen_keys: set[str] = set()
+
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+
+        title = _truncate_text(_normalize_text(item.get("title", "")), MAX_TITLE_CHARS)
+        snippet = _truncate_text(_normalize_text(item.get("snippet", "")), MAX_SNIPPET_CHARS)
+        content = _truncate_text(_normalize_text(item.get("content", "")), MAX_CONTENT_CHARS)
+        url = _normalize_text(item.get("url", ""))
+
+        dedupe_key = title or url
+        if not dedupe_key or dedupe_key in seen_keys:
+            continue
+        seen_keys.add(dedupe_key)
+
+        compact_item: Dict[str, Any] = {
+            "title": title,
+            "snippet": snippet or content,
+            "url": url,
+        }
+
+        domain_hint = _domain_hint(url)
+        if domain_hint:
+            compact_item["source_hint"] = domain_hint
+        if content and content != compact_item["snippet"]:
+            compact_item["content"] = content
+
+        compact_items.append(compact_item)
+        if len(compact_items) >= MAX_CANDIDATES_PER_CATEGORY:
+            break
+
+    if not compact_items:
+        return _truncate_text(normalized, MAX_FALLBACK_TEXT_CHARS)
+
+    return json.dumps(compact_items, ensure_ascii=False, separators=(",", ":"))
+
+
+def _build_compact_inputs(state: OrganizeNewsInput) -> Dict[str, str]:
+    inputs = {
+        "tech_stocks_news": _compress_news_payload(state.tech_stocks_news),
+        "hk_internet_news": _compress_news_payload(state.hk_internet_news),
+        "commodities_news": _compress_news_payload(state.commodities_news),
+        "market_events_news": _compress_news_payload(state.market_events_news),
+    }
+
+    for key, value in inputs.items():
+        logger.info("[organize_news] 输入压缩 %s: %d -> %d chars", key, len(getattr(state, key, "") or ""), len(value))
+
+    return inputs
+
+
 def organize_news_node(
     state: OrganizeNewsInput, config: RunnableConfig, runtime: Runtime[Any]
 ) -> OrganizeNewsOutput:
@@ -63,18 +152,19 @@ def organize_news_node(
     sp: str = _cfg.get("sp", "")
     up: str = _cfg.get("up", "")
 
-    model_name: str = llm_config.get("model", "doubao-seed-2-0-lite-260215")
+    model_name: str = llm_config.get("model", "qwen-plus-0112")
     temperature: float = llm_config.get("temperature", 0.1)
     max_completion_tokens: int = llm_config.get("max_completion_tokens", 8192)
 
     # 渲染用户提示词
+    compact_inputs = _build_compact_inputs(state)
     up_tpl = Template(up)
     user_prompt = up_tpl.render(
         {
-            "tech_stocks_news": state.tech_stocks_news or "暂无科技股相关资讯",
-            "hk_internet_news": state.hk_internet_news or "暂无港股互联网相关资讯",
-            "commodities_news": state.commodities_news or "暂无大宗商品相关资讯",
-            "market_events_news": state.market_events_news or "暂无市场震荡事件相关资讯",
+            "tech_stocks_news": compact_inputs["tech_stocks_news"] or "暂无科技股相关资讯",
+            "hk_internet_news": compact_inputs["hk_internet_news"] or "暂无港股互联网相关资讯",
+            "commodities_news": compact_inputs["commodities_news"] or "暂无大宗商品相关资讯",
+            "market_events_news": compact_inputs["market_events_news"] or "暂无市场震荡事件相关资讯",
         }
     )
 
