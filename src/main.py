@@ -8,6 +8,8 @@ import sys
 import uuid
 from typing import Any, AsyncGenerator, Dict
 
+from tools.lark_cli_preflight import LarkCliPreflightError, ensure_lark_cli_preflight
+
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:
@@ -21,6 +23,10 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _preflight_payload(payload: Dict[str, Any]) -> None:
+    ensure_lark_cli_preflight(payload.get("base_token"), payload.get("table_id"))
 
 
 def ensure_project_python() -> None:
@@ -76,6 +82,7 @@ class GraphService:
     async def run(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         run_id = str(uuid.uuid4())
         logger.info("Starting workflow run: run_id=%s", run_id)
+        _preflight_payload(payload)
         graph = self._get_graph()
         result = await graph.ainvoke(
             payload,
@@ -88,6 +95,7 @@ class GraphService:
     async def stream_sse(self, payload: Dict[str, Any]) -> AsyncGenerator[str, None]:
         run_id = str(uuid.uuid4())
         logger.info("Starting workflow stream: run_id=%s", run_id)
+        _preflight_payload(payload)
         graph = self._get_graph()
         try:
             async for output in graph.astream(
@@ -102,6 +110,7 @@ class GraphService:
 
     async def run_node(self, node_id: str, payload: Dict[str, Any]) -> Any:
         if node_id == "write_feishu":
+            _preflight_payload(payload)
             from graphs.nodes.write_feishu_node import write_feishu_node
             from graphs.state import WriteFeishuInput
 
@@ -133,6 +142,8 @@ def create_app():
 
         try:
             return await service.run(payload)
+        except LarkCliPreflightError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("/run failed")
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -144,7 +155,10 @@ def create_app():
         except json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail="Invalid JSON format") from exc
 
-        return StreamingResponse(service.stream_sse(payload), media_type="text/event-stream")
+        try:
+            return StreamingResponse(service.stream_sse(payload), media_type="text/event-stream")
+        except LarkCliPreflightError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/node_run/{node_id}")
     async def http_node_run(node_id: str, request: Request) -> Any:
@@ -157,6 +171,8 @@ def create_app():
             return await service.run_node(node_id, payload)
         except NotImplementedError as exc:
             raise HTTPException(status_code=501, detail=str(exc)) from exc
+        except LarkCliPreflightError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             logger.exception("/node_run failed: %s", node_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc

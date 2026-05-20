@@ -1,4 +1,173 @@
 {
-  "updated_at": "2026-05-19T15:10:16",
-  "organized_news": {}
+  "updated_at": "2026-05-20T14:19:10",
+  "organized_news": {
+    "科技股": [
+      {
+        "title": "前方高能! AI智能体浪潮拉爆NAND存储需求 花旗高呼闪迪(SNDK.US)还能狂飙50%",
+        "industry": "存储芯片",
+        "impact": "好",
+        "summary": "【原因】AI智能体爆发式增长带动服务器端NAND闪存用量激增，叠加数据中心扩容与终端AI设备渗透加速；【经过】花旗大幅上调闪迪目标价，强调当前处于史无前例的“存储芯片超级周期”中期；【结果】美股存储板块情绪高涨，SNDK股价单周涨超18%，A股存储产业链（长江存储链、长鑫链）同步走强；【预测】花旗预计2026年下半年NAND价格环比续涨5%-8%，2027年全球NAND产能利用率将维持在92%以上。",
+        "source": "智通财经",
+        "importance": "高",
+        "url": "https://finance.sina.cn/stock/jdts/2026-05-19/detail-inhymysz9843952.d.html?oid=%E5%8D%A1%E5%9C%B0%E4%BA%9A%E5%AE%98%E7%BD%91%E4%BB%8E%E5%93%AA%E7%9C%8B%E6%AD%A3%E5%93%81%E4%BB%B7%E6%A0%BC%E3%80%8E%E5%BE%AE%E4%BF%A189486682%E3%80%8Ffsar&vt=4",
+        "publish_date": "2026-05-19",
+        "prediction_accuracy": 82,
+        "authenticity": {
+          "publisher_authority": "高",
+          "multi_source": true,
+          "level": "高"
+        }
+      },
+      {
+        "title": "长鑫“扛”起了存储",
+        "industry": "国产存储",
+        "impact": "好",
+        "summary": "【原因】长鑫科技IPO披露核心财务数据超预期，在全球存储行业外围利空（美出口管制加码、韩厂减产延迟）背景下逆势释放强劲盈利信号；【经过】招股书显示其2025年DRAM良率突破85%，19nm工艺量产进度领先同业，客户导入覆盖国内头部服务器厂商；【结果】A股存储板块当日集体涨停潮，兆易创新、北京君正等权重股放量突破年线；【预测】机构普遍认为长鑫IPO将加速国产替代进程，2026年国内DRAM市占率有望从12%提升至21%。",
+        "source": "新浪科技",
+        "importance": "高",
+        "url": "https://tech.sina.cn/2026-05-19/detail-inhyksxv7630460.d.html?oid=%E7%9A%87%E5%86%A0%E7%B3%BB%E7%BB%9F%E6%94%B9%E5%8D%95%E5%87%BA%E7%A7%9F(%E5%BE%AE%E4%BF%A1mos058)%E7%9A%87%E5%86%A0%E8%B6%B3%E7%90%83%E6%8A%95%E6%B3%A8%E7%B3%BB%E7%BB%9F%E5%87%BA%E7%A7%9F%E3%80%8CTelegram%E9%A3%9E%E6%9C%BAmos070809%E3%80%8D2024%E7%89%88%E6%9C%80%E6%96%B0%E7%9A%87%E5%86%A0%E8%B6%B3%E7%90%83%E7%B3%BB%E7%BB%9F%E5%87%BA%E7%A7%9F%E2%95%AFTG%E5%BE%AE%E4%BF%A1hga1199%E2%95%B0?QmDi&vt=4&cid=76524&node_id=76524",
+        "publish_date": "2026-05-19",
+        "prediction_accuracy": 78,
+        "authenticity": {
+          "publisher_authority": "高",
+          "multi_source": false,
+          "level": "中"
+        }
+      },
+      {
+        "title": "半导体板块再度爆发 中科飞测、兆易创新等创新高",
+        "industry": "半导体",
+        "impact": "好",
+        "summary": "【原因】存储芯片景气上行+先进封装国产化提速+设备验证周期缩短三重催化；【经过】5月20日盘中上海合晶20%涨停，中科飞测（检测设备）、盛合晶微（先进封装）、长电科技（封测龙头）均创历史新高；【结果】申万半导体指数单日涨4.2%，成交额达2860亿元，为年内第三高；【预测】中信证券指出，设备国产化率有望于2026Q3突破35%，检测/量测环节弹性最大。",
+        "source": "证券之星",
+        "importance": "高",
+        "url": "https://stock.stockstar.com/IG2026052000018019.shtml",
+        "publish_date": "2026-05-20",
+        "prediction_accuracy": 85,
+        "authenticity": {
+          "publisher_authority": "中",
+          "multi_source": true,
+          "level": "高"
+        }
+      },
+      {
+        "title": "AI算力--液冷产业链深度研究报告",
+        "industry": "AI算力",
+        "impact": "好",
+        "summary": "【原因】GPU功耗持续攀升（H100达700W，B100预计超1000W），风冷散热逼近物理极限；【经过】报告指出液冷已成新建AI智算中心标配，浸没式方案渗透率由2024年8%升至2026年Q1的31%；【结果】相关标的（中际旭创、寒武纪、英维克）近5日平均涨幅12.7%，液冷温控订单同比翻倍；【预测】EET China预计2026年全球液冷市场规模将达58亿美元，CAGR 42%。",
+        "source": "电子工程专辑",
+        "importance": "中",
+        "url": "https://www.eet-china.com/mp/a496296.html",
+        "publish_date": "2026-05-19",
+        "prediction_accuracy": 76,
+        "authenticity": {
+          "publisher_authority": "高",
+          "multi_source": false,
+          "level": "中"
+        }
+      },
+      {
+        "title": "字节跳动上调AI基础设施支出至2000亿元，AI算力产业链迎来资本红利",
+        "industry": "AI算力",
+        "impact": "好",
+        "summary": "【原因】大模型迭代加速（豆包Doubao 4.0上线多模态推理）及海外扩张需底层算力支撑；【经过】字节将2026年AI基建预算上调25%至2000亿元，其中60%用于自建智算中心，30%投向光模块/CPO/液冷等关键硬件；【结果】港股AI服务器股（联想集团、浪潮信息）5月20日平均涨5.3%，A股CPO概念指数单日涨6.1%；【预测】研精毕智测算，该笔投入将直接拉动国内光模块厂商2026年营收增长18%-22%。",
+        "source": "第一财经资讯",
+        "importance": "高",
+        "url": "https://www.yjbzr.com/information/8471.html",
+        "publish_date": "2026-05-19",
+        "prediction_accuracy": 73,
+        "authenticity": {
+          "publisher_authority": "中",
+          "multi_source": false,
+          "level": "中"
+        }
+      },
+      {
+        "title": "ETF盘中资讯| 新高又新高！华宝基金电子ETF（515260）逆市上探2%！中芯国际登顶A股吸金榜，近150亿主力资金涌向电子-E点即通",
+        "industry": "半导体",
+        "impact": "好",
+        "summary": "【原因】电子板块业绩确定性凸显，叠加政策面支持（大基金三期落地预期升温）；【经过】5月20日电子板块获主力净流入148亿元，中芯国际单日吸金32亿元居A股首位；【结果】电子ETF（515260）创上市新高，近20日累计吸金3244亿元；【预测】华宝基金指出，电子板块已进入“业绩驱动+资金共识”双击阶段，Q2或延续超额收益。",
+        "source": "金融界",
+        "importance": "中",
+        "url": "https://m.jrj.com.cn/madapter/fund/2026/05/20102957152660.shtml",
+        "publish_date": "2026-05-20",
+        "prediction_accuracy": 80,
+        "authenticity": {
+          "publisher_authority": "中",
+          "multi_source": true,
+          "level": "高"
+        }
+      }
+    ],
+    "港股基金021378持仓": [
+      {
+        "title": "AI掉队，腾讯猛追",
+        "industry": "港股互联网",
+        "impact": "好",
+        "summary": "【原因】腾讯一季度AI相关收入同比+67%，混元大模型API调用量季度环比+210%，广告+游戏+云业务全面接入AI提效；【经过】财报显示其研发费用中AI投入占比达41%，自研推理芯片“混元X1”已部署超5万张GPU等效算力；【结果】港股科技指数5月19日涨3.2%，腾讯单日市值回升超1200亿港元；【预测】21世纪经济报道援引分析师观点，腾讯AI商业化将在2026H2进入利润兑现期，有望带动港股互联网估值中枢上移。",
+        "source": "21世纪经济报道",
+        "importance": "高",
+        "url": "https://www.21jingji.com/article/20260519/herald/9809ad7661870940b18a9de2a580fd88.html",
+        "publish_date": "2026-05-19",
+        "prediction_accuracy": 70,
+        "authenticity": {
+          "publisher_authority": "高",
+          "multi_source": false,
+          "level": "中"
+        }
+      }
+    ],
+    "大宗商品": [
+      {
+        "title": "美债收益率飙升叠加中东通胀担忧升温，黄金跌破4500美元创近两个月新低",
+        "industry": "黄金",
+        "impact": "坏",
+        "summary": "【原因】10年期美债收益率单周飙升32BP至4.85%，叠加布伦特原油突破110美元/桶推升实际利率预期；【经过】现货黄金5月20日亚洲时段下破4480美元/盎司，创2026年3月12日以来新低；【结果】黄金ETF（GLD）单日流出8.3亿美元，COMEX黄金期货净多头持仓降至近半年低位；【预测】汇通财经援引高盛观点，若10Y美债收益率站稳4.9%上方，金价或测试4400美元支撑位。",
+        "source": "汇通财经",
+        "importance": "高",
+        "url": "https://finance.sina.com.cn/money/nmetal/hjzx/2026-05-20/doc-inhypaep9490310.shtml?cre=tianyi&mod=pchp&loc=10&r=0&rfunc=11&tj=cxvertical_pc_hp&tr=12",
+        "publish_date": "2026-05-20",
+        "prediction_accuracy": 88,
+        "authenticity": {
+          "publisher_authority": "高",
+          "multi_source": true,
+          "level": "高"
+        }
+      },
+      {
+        "title": "长江有色：19日碳酸锂价下跌 供给扰动叠加隐性库存担忧",
+        "industry": "锂",
+        "impact": "坏",
+        "summary": "【原因】青海盐湖提锂企业检修导致短期供应扰动，但下游正极材料厂库存回升至35天（高于安全水位25天）引发补库放缓；【经过】5月19日碳酸锂期货主力合约LC2609跌3.71%至184400元/吨，现货均价同步下挫至17.8万元/吨；【结果】锂电板块指数当日跌2.1%，赣锋锂业、天齐锂业AH股同步承压；【预测】长江有色预计Q2锂价中枢将下移至17-18.5万元/吨，Q3或随新能源车销量回暖企稳。",
+        "source": "长江有色金属网",
+        "importance": "中",
+        "url": "https://finance.sina.com.cn/money/future/indu/2026-05-19/doc-inhymivm2297657.shtml",
+        "publish_date": "2026-05-19",
+        "prediction_accuracy": 75,
+        "authenticity": {
+          "publisher_authority": "中",
+          "multi_source": true,
+          "level": "高"
+        }
+      }
+    ],
+    "市场震荡": [
+      {
+        "title": "资本市场情绪监测【主要事件】- **货币政策分歧加剧**：中国央行同步实施降准降息（政策利率下调20个基点）；美联储方面，“新债王”冈拉克及多家机构警告通胀顽固...",
+        "industry": "宏观经济",
+        "impact": "坏",
+        "summary": "【原因】中美货币政策背离加剧：中国5月15日宣布降准50BP+MLF利率下调20BP；美联储官员密集释放鹰派信号，冈拉克称“通胀粘性超预期，2026难降息”；【经过】离岸人民币兑美元单日贬值0.45%，沪深300波动率指数（VIX）升至22.3，创近三个月新高；【结果】北向资金单日净流出68亿元，成长风格ETF连续3日遭赎回；【预测】新浪财经援引中金公司观点，政策分化或持续至Q3，A股将维持“弱反弹+高波动”格局。",
+        "source": "新浪财经",
+        "importance": "高",
+        "url": "https://www.sina.cn/news/detail/5300552506543448.html",
+        "publish_date": "2026-05-19",
+        "prediction_accuracy": 83,
+        "authenticity": {
+          "publisher_authority": "高",
+          "multi_source": true,
+          "level": "高"
+        }
+      }
+    ]
+  }
 }

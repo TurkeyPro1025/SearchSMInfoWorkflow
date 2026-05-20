@@ -16,11 +16,13 @@
 
 ## 工作流DAG结构
 ```
-START ─┬→ search_tech_stocks ──┐
-       ├→ search_hk_internet ──┤
-       ├→ search_commodities ──┼→ organize_news → write_feishu → END
-       └→ search_market_events┘
+START → cli_preflight ─┬→ search_tech_stocks ──┐
+                       ├→ search_hk_internet ──┤
+                       ├→ search_commodities ──┼→ organize_news → write_feishu → END
+                       └→ search_market_events┘
 ```
+- `cli_preflight` 是硬门槛：先检查 `lark-cli` 脚手架状态、`lark-cli auth status` 的 user 登录态，以及 `lark-cli base +field-list --as user` 对目标 Base/Table 的只读权限
+- 只有 `cli_preflight` 通过，4 路搜索节点才允许启动；若预检失败，整个工作流立即终止，避免先消耗 Web Search/LLM 再在飞书写入阶段失败
 - 4路搜索节点从START并行触发
 - 4路搜索全部完成后汇聚到 organize_news
 - organize_news 完成后进入 write_feishu
@@ -38,6 +40,7 @@ START ─┬→ search_tech_stocks ──┐
 
 ## 飞书多维表格写入约束
 节点 `write_feishu` 只负责把整理后的资讯写入用户指定的现有数据表：
+- 项目入口会先执行 CLI 预检；若 `auth status` 或 `+field-list` 不通过，不会进入搜索、整理和写入阶段
 - 运行时通过 `lark-cli base +field-list / +record-list / +record-batch-create --as user` 与飞书交互
 - 写入前会按 `链接` 字段去重：先去当前批次重复，再过滤目标表中已存在的链接
 - 不自动建表、不自动建字段；目标表字段需提前按工作流约定准备好

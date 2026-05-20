@@ -2,16 +2,23 @@
 
 ## 飞书 Skill 安装提醒
 
-首次在新环境运行前，请先安装并登录飞书 CLI 与 Skill：
+首次在新环境运行前，请先安装并登录飞书 CLI 与 Skill。项目入口现在会在真正开始搜索和 LLM 整理前，强制执行一轮 CLI 预检；只要脚手架、user 登录态或 Base 读权限不通过，就会直接失败，不再继续跑后续步骤。
 
 ```bash
 npm install -g @larksuite/cli
 npx -y skills add https://open.feishu.cn --skill -y
-lark-cli auth login --recommend
+lark-cli config init --new
+lark-cli auth login --scope "bitable:app:readonly bitable:app"
 lark-cli auth status
 ```
 
-若未完成以上步骤，涉及飞书多维表格读写的流程可能会失败。
+建议再补一条只读权限检查，确认目标 Base/Table 在当前 user 身份下可见：
+
+```bash
+lark-cli base +field-list --as user --base-token "$FEISHU_BASE_TOKEN" --table-id "$FEISHU_TABLE_ID"
+```
+
+若未完成以上步骤，项目入口会直接终止，不会继续搜索、调用 LLM 或尝试写入飞书。
 
 ## .env 配置模板（不含真实值）
 
@@ -99,6 +106,8 @@ Windows 一键运行：
 .\scripts\run_flow.ps1
 ```
 
+说明：该入口现在会在真正执行工作流前，先校验 `lark-cli` 可用性、`lark-cli auth status` 的 user 登录态，以及目标 Base 的 `+field-list` 只读权限。任一失败都会直接报错退出。
+
 ## 运行节点
 bash scripts/local_run.sh -m node -n node_name
 
@@ -128,7 +137,7 @@ lark-cli auth status
 若未登录或身份失效，重新登录：
 
 ```bash
-lark-cli auth login --recommend
+lark-cli auth login --scope "bitable:app:readonly bitable:app"
 ```
 
 登录后可先做只读检查，确认 `base_token` 与 `table_id` 可用：
@@ -137,5 +146,5 @@ lark-cli auth login --recommend
 lark-cli base +field-list --as user --base-token "$FEISHU_BASE_TOKEN" --table-id "$FEISHU_TABLE_ID"
 ```
 
-若该命令可正常返回字段列表，说明当前 CLI 身份与目标 Base 已可用于工作流写入。
+若该命令可正常返回字段列表，说明当前 CLI 身份与目标 Base 已可用于工作流写入。当前项目的 `flow`、`stream_run` 和 `node(write_feishu)` 入口都会在开始前强制执行这一步校验；失败时直接中止，避免先做搜索和整理，最后才发现飞书不可用。
 

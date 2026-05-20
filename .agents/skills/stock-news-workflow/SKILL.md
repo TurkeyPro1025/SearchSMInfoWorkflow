@@ -1,6 +1,6 @@
 ---
 name: stock-news-workflow
-version: 1.3.0
+version: 1.5.0
 description: "股市资讯定时抓取整理工作流：并行搜索科技股、港股基金021378持仓、大宗商品、市场震荡四个领域的最新资讯，经 LLM 结构化整理后批量写入用户指定的飞书多维表格。当用户说「抓取股市资讯」「运行股票新闻工作流」「更新飞书股市表格」「整理今日资讯」时触发。"
 ---
 
@@ -15,6 +15,8 @@ description: "股市资讯定时抓取整理工作流：并行搜索科技股、
 3. 数据流必须可追踪：搜索原始结果 -> LLM 结构化结果 -> 飞书写入 payload。
 4. 飞书写入默认优先使用 `lark-cli base`，且显式指定 `--as user`；不要静默切换到 bot / app / tenant 身份。
 5. 除用户明确要求外，不自动建表或建字段；仅写入用户指定 `base_token` + `table_id`。
+6. CLI 预检优先级最高：在任何 Web Search、LLM 调用、缓存刷新或批量写入前，必须先验证脚手架状态、user 登录态和目标 Base 读权限；任一项失败都要立即终止。
+7. 当用户在调用时提供 `base_token` / `table_id`，应将其视为可复用参数：后续调用若未显式覆盖，优先复用已保存值（若调用宿主支持，否则仍需向用户索取），而不是每次重新向用户索取。
 
 ## 前置条件
 
@@ -41,7 +43,57 @@ description: "股市资讯定时抓取整理工作流：并行搜索科技股、
 1. `lark-cli base +...` 使用的是 `base_token`，不要把 `app_token` 传给 `--base-token`。
 2. 若用户明确要求 user 身份，认证失败时必须直接报错并引导重新登录，不要偷偷降级到应用身份。
 
-## 工作流（3步）
+## 参数持久化（强约束）
+
+当用户首次提供或更新 `base_token` 与 `table_id` 时，后续调用按以下规则处理：
+
+1. `base_token` 必须以加密形式保存到本地安全存储中；禁止以明文写入工作区文件、日志、终端输出、回复正文、截图说明或普通 memory 文本。
+2. `table_id` 作为非密钥参数，可与该配置一并保存，并在后续调用中自动回填。
+3. 后续运行若用户未显式提供参数，先尝试读取已保存的默认 `base_token` 与 `table_id`；只有本地无保存值时，才向用户索取。
+4. 若用户本次明确提供了新的 `base_token` 或 `table_id`，视为覆盖更新；成功通过 Step 0 预检后，用新值替换旧值。
+5. 若用户明确要求“不保存”“清除已保存参数”或“切换到另一张表”，必须尊重用户意图，删除或更新已保存值。
+6. 对外汇报时，`base_token` 只能脱敏展示；`table_id` 可按需原样展示。
+7. 若当前运行环境不具备可靠的本地加密保存能力，则必须明确告知这一限制；不要退化为明文持久化。
+
+## 工作流（4步）
+
+### Step 0 — CLI 预检（最高优先级，失败即终止）
+
+在开始搜索前，必须先完成以下 3 项检查；只有全部通过，才允许进入后续步骤。
+
+1. 检查 `lark-cli` 脚手架状态。
+
+首次运行或怀疑本机未完成初始化时，先按 [../lark-shared/SKILL.md](../lark-shared/SKILL.md) 执行：
+
+```bash
+lark-cli config init --new
+```
+
+2. 检查 user 登录态。
+
+```bash
+lark-cli auth status
+```
+
+若未登录、token 失效、或当前身份不是用户要求的 `user`，立即停止，并引导用户重新执行带范围的授权：
+
+```bash
+lark-cli auth login --scope "bitable:app:readonly bitable:app"
+```
+
+3. 检查目标 Base 的实际读权限与字段可见性。
+
+```bash
+lark-cli base +field-list --as user --base-token <base_token> --table-id <table_id>
+```
+
+处理规则：
+
+1. 这一步是整个工作流的硬门槛；未通过前，禁止执行 Web Search、LLM、缓存清空或 `+record-batch-create`。
+2. 若返回 401/403、refresh 失败、scope 不足或 `permission_violations`，立即终止，并按 [../lark-shared/SKILL.md](../lark-shared/SKILL.md) 优先处理 user 授权或权限开通。
+3. 若 `+field-list` 失败，则视为“当前表不可写”而不是“稍后再试”；因为连字段都读不到，继续搜索和整理只会功亏一篑。
+4. 只有在 Step 0 通过后，才允许进入搜索与 LLM 整理。
+5. Step 0 使用的 `base_token` 与 `table_id`，优先顺序为：用户本次显式输入 > 本地安全存储中的已保存默认值；禁止回退到明文缓存或临时日志抄录值。
 
 ### Step 1 — 搜索（4领域并行）
 
@@ -113,6 +165,8 @@ lark-cli base +record-batch-create \
 ```bash
 lark-cli base +field-list --as user --base-token <base_token> --table-id <table_id>
 ```
+
+  说明：Step 0 已做过一次预检；这里再次执行属于写入前的最终保护，不可替代 Step 0。
 
 2. 使用 FEISHU-SCHEMA 的字段顺序生成 `fields + rows`，空值统一 `null`。
 3. `lark-cli` 读取 `@file.json` 时要求相对路径；先切到项目目录，再用 `"@./src/storage/cache/records.batch-00N.json"` 传参。
