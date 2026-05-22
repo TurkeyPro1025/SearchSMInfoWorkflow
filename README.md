@@ -63,7 +63,7 @@ COZE_PROJECT_ENV=          # 环境标识（如 dev/test/prod）
 
 ## 工作流梳理（含 LLM/工具）
 
-本项目使用 LangGraph 编排，整体为 4 路并行搜索 → LLM 整理 → 飞书写入。
+本项目使用 LangGraph 编排，整体为 CLI 预检 → 4 路并行搜索（节点内先做 query 级硬规则过滤）→ 原始搜索缓存 → LLM 整理 → 飞书写入。
 
 > **Web Search 供应商优先级（FallbackSearchClient）**  
 > `Serper（Google Serper API）` → `Bing（Azure Bing News v7）` → `Brave Search API` → `Google CSE`  
@@ -71,17 +71,29 @@ COZE_PROJECT_ENV=          # 环境标识（如 dev/test/prod）
 
 ```mermaid
 flowchart LR
-    A["START"] --> B["search_tech_stocks<br/>工具: FallbackSearchClient - Web Search"]
-    A --> C["search_hk_internet<br/>工具: FallbackSearchClient - Web Search"]
-    A --> D["search_commodities<br/>工具: FallbackSearchClient - Web Search"]
-    A --> E["search_market_events<br/>工具: FallbackSearchClient - Web Search"]
+    A["START"] --> P["CLI 预检<br/>lark-cli config/auth/field-list"]
 
-    B --> F["organize_news<br/>LLM: qwen-plus<br/>框架: ChatOpenAI"]
-    C --> F
-    D --> F
-    E --> F
+    subgraph Q["并行搜索阶段(Web Search + query级关键词过滤)"]
+        direction TB
+        B["search_tech_stocks<br/>"]
+        C["search_hk_internet<br/>"]
+        D["search_commodities<br/>"]
+        E["search_market_events<br/>"]
+    end
 
-    F --> G["write_feishu<br/>工具: lark-cli base --as user"]
+    P --> B
+    P --> C
+    P --> D
+    P --> E
+
+    B --> S["search_news_cache<br/>原始搜索结果聚合缓存"]
+    C --> S
+    D --> S
+    E --> S
+
+    S --> F["organize_news<br/>LLM: qwen-plus + ChatOpenAI"]
+    F --> O["organized_news_cache<br/>结构化结果缓存"]
+    O --> G["write_feishu<br/>lark-cli base --as user"]
     G --> H["END"]
 ```
 
@@ -89,12 +101,23 @@ flowchart LR
 
 | 节点 | 作用 | 使用的 LLM/工具 |
 |---|---|---|
-| search_tech_stocks | 抓取科技股资讯 | FallbackSearchClient（Web Search） |
-| search_hk_internet | 抓取港股基金021378持仓相关资讯 | FallbackSearchClient（Web Search） |
-| search_commodities | 抓取大宗商品资讯 | FallbackSearchClient（Web Search） |
-| search_market_events | 抓取市场震荡事件资讯 | FallbackSearchClient（Web Search） |
-| organize_news | 分类、去重、结构化摘要、真实性与预测评估 | LLM: qwen-plus（配置文件: config/organize_news_llm_cfg.json）+ ChatOpenAI |
+| cli_preflight | 在任何搜索、缓存刷新或写入前验证 lark-cli、user 登录态和目标 Base 读权限 | lark-cli |
+| search_tech_stocks | 抓取科技股资讯；按当前 query 绑定关键词做硬规则过滤，再按标题/链接去重 | FallbackSearchClient（Web Search） |
+| search_hk_internet | 抓取港股基金021378持仓相关资讯；按当前 holding query 绑定主体别名做硬规则过滤，再按标题/链接去重 | FallbackSearchClient（Web Search） |
+| search_commodities | 抓取大宗商品资讯；按当前 query 绑定关键词做硬规则过滤，再按标题/链接去重 | FallbackSearchClient（Web Search） |
+| search_market_events | 抓取市场震荡事件资讯；按当前 query 绑定关键词做硬规则过滤，再按标题/链接去重 | FallbackSearchClient（Web Search） |
+| search_news_cache | 聚合 4 路原始搜索结果，供 LLM 前审计与排错 | `src/storage/cache/search_news_cache.json` |
+| organize_news | 分类、去重、结构化摘要、真实性与预测评估，并写入结构化缓存 | LLM: qwen-plus（配置文件: config/organize_news_llm_cfg.json）+ ChatOpenAI |
+| organized_news_cache | 保存最新的 LLM 结构化结果，供写入失败时直接重试 | `src/storage/cache/organized_news_cache.json` |
 | write_feishu | 字段对齐、按链接去重、批量写入多维表格 | lark-cli base（`--as user`） |
+
+### 搜索阶段规则
+
+- 四个搜索节点都已从“全领域任意关键词命中即保留”调整为“按当前 query 绑定关键词/别名过滤”。
+- 科技股已补充 CPO 独立 query，并扩展了存储芯片、半导体、光伏、锂电、储能、AI 算力等同义词。
+- 港股基金021378持仓节点已改为按当前 holding query 绑定主体别名过滤，避免腾讯 query 混入小米或阿里的结果。
+- 大宗商品和市场震荡节点也已按 query 绑定关键词过滤，减少与当前 query 无关的板块噪声。
+- 原始搜索结果会在进入 LLM 前写入 `src/storage/cache/search_news_cache.json`，便于核对“是搜索阶段丢了，还是 LLM 整理阶段丢了”。
 
 # 本地运行
 ## 运行流程
@@ -116,6 +139,23 @@ Windows 单节点运行：
 ```powershell
 .\scripts\run_flow.ps1 -Mode node -Node write_feishu
 ```
+
+常用节点示例：
+
+```powershell
+.\scripts\run_flow.ps1 -Mode node -Node search_tech_stocks
+.\scripts\run_flow.ps1 -Mode node -Node search_hk_internet
+.\scripts\run_flow.ps1 -Mode node -Node search_commodities
+.\scripts\run_flow.ps1 -Mode node -Node search_market_events
+.\scripts\run_flow.ps1 -Mode node -Node organize_news
+.\scripts\run_flow.ps1 -Mode node -Node write_feishu
+```
+
+说明：
+
+- `search_*` 适合单独检查 Web Search 返回、query 级硬规则过滤和去重效果。
+- `organize_news` 适合只验证 LLM 整理与缓存写入。
+- `write_feishu` 适合在已有 `organized_news_cache.json` 时直接重试飞书写入。
 
 # 启动HTTP服务
 bash scripts/http_run.sh -m http -p 5000

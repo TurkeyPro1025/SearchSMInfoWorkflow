@@ -1,6 +1,6 @@
 ---
 name: stock-news-workflow
-version: 1.5.0
+version: 1.6.0
 description: "股市资讯定时抓取整理工作流：并行搜索科技股、港股基金021378持仓、大宗商品、市场震荡四个领域的最新资讯，经 LLM 结构化整理后批量写入用户指定的飞书多维表格。当用户说「抓取股市资讯」「运行股票新闻工作流」「更新飞书股市表格」「整理今日资讯」时触发。"
 ---
 
@@ -35,6 +35,7 @@ description: "股市资讯定时抓取整理工作流：并行搜索科技股、
 - `assets/workflow/hk_internet_news.json`
 - `assets/workflow/commodities_news.json`
 - `assets/workflow/market_events_news.json`
+- `src/storage/cache/search_news_cache.json`
 - `src/storage/cache/organized_news_cache.json`
 - `src/storage/cache/records.batch-001.json`（超 200 条时递增）
 
@@ -99,7 +100,7 @@ lark-cli base +field-list --as user --base-token <base_token> --table-id <table_
 
 读取 [SEARCH-QUERIES.md](SEARCH-QUERIES.md) 获取全部 24 条搜索词。
 
-对每个领域的 6 条查询逐一执行 web search（`count=10, time_range=1d`），按标题去重后合并为该领域的结果列表。4 个领域产出 4 个原始结果变量：
+对每个领域的查询逐一执行 web search（`count=10`，时间窗口由工作流输入控制；默认过去24小时），先按 query 级硬规则过滤，再按标题/链接去重后合并为该领域的结果列表。4 个领域产出 4 个原始结果变量：
 
 - `tech_stocks_news`（科技股）
 - `hk_internet_news`（港股基金021378持仓）
@@ -109,9 +110,13 @@ lark-cli base +field-list --as user --base-token <base_token> --table-id <table_
 执行要求：
 
 1. 每条查询都要命中一个可用供应商，遇到 429/403 立即切换下游供应商。
-2. 单领域内按标题去重，保留首条更完整来源。
-3. 每条结果最少保留字段：`title/url/snippet/source/publish_date`。
-4. 领域结果保存为 JSON 数组，写入对应中间文件。
+2. 搜索节点必须先执行 query 级硬规则过滤：
+  - 科技股 / 大宗商品 / 市场震荡：按“当前 query 对应关键词组”过滤，而不是全领域任意关键词命中即保留。
+  - 港股基金021378持仓：按“当前 holding query 对应主体别名”过滤，而不是命中任一持仓别名即保留。
+3. 单领域内按标题或链接去重，保留首条更完整来源。
+4. 每条结果最少保留字段：`title/url/snippet/content/publish_date`；若供应商提供 `source` 可一并保留。
+5. 搜索节点日志建议输出 `fetched / related_kept / filtered_out / dedup_added / total_after`，便于审计硬规则过滤效果。
+6. 领域结果保存为 JSON 数组，并在进入 LLM 前统一写入 `src/storage/cache/search_news_cache.json` 供审计。
 
 ### Step 2 — LLM 整理
 
@@ -127,10 +132,20 @@ LLM 输出格式：`{"科技股": [...], "港股基金021378持仓": [...], "大
 2. 若首轮返回非 JSON：仅重试一次，并附加约束“只返回合法 JSON”。
 3. 解析后仅保留四个领域 key：科技股、港股基金021378持仓、大宗商品、市场震荡。
 4. 搜索结果在进入 LLM 前只做去重与字段压缩，不按条数裁剪；去重后的消息都应保留并传给 LLM。
-5. 将新的 LLM 结果写入缓存前，先清空现有缓存中的 `organized_news`，再写入新的 `organized_news` 到 `src/storage/cache/organized_news_cache.json`。
-6. 缓存文件建议同时写入 `updated_at`，用于标记本次 LLM 整理完成时间。
-7. Step 3 只负责读取并写入飞书，不再在写入成功后清空缓存；缓存刷新时机统一放在下一次 Step 2 写入新结果之前。
-8. 输出后校验若发现潜在误合并，只通过日志提醒即可；日志需至少包含领域和对应的两条标题，供用户手动在飞书中处理。
+5. LLM 调用前，将 4 个领域的原始搜索结果统一写入 `src/storage/cache/search_news_cache.json`，并写入 `updated_at`。
+6. 将新的 LLM 结果写入缓存前，先清空现有缓存中的 `organized_news`，再写入新的 `organized_news` 到 `src/storage/cache/organized_news_cache.json`。
+7. 缓存文件建议同时写入 `updated_at`，用于标记本次 LLM 整理完成时间。
+8. Step 3 只负责读取并写入飞书，不再在写入成功后清空缓存；缓存刷新时机统一放在下一次 Step 2 写入新结果之前。
+9. 输出后校验若发现潜在误合并，只通过日志提醒即可；日志需至少包含领域和对应的两条标题，供用户手动在飞书中处理。
+
+### 搜索缓存生命周期（强约束）
+
+`src/storage/cache/search_news_cache.json` 是 Step 1 到 Step 2 之间的原始结果审计快照，处理规则如下：
+
+1. Step 1 完成后，不在各搜索节点分别落多个文件；统一由 Step 2 在调用 LLM 前聚合写入 `src/storage/cache/search_news_cache.json`。
+2. 文件格式统一为：`{"updated_at": "...", "search_news": {...}}`，其中 `search_news` 下仅保留四个领域 key。
+3. 缓存中的原始搜索结果只做 query 级硬规则过滤和标题/链接去重，不做 LLM 级语义裁剪。
+4. 若用户反馈某条资讯被 LLM 误删，应优先对比 `search_news_cache.json` 与 `organized_news_cache.json`，区分是搜索过滤阶段丢失还是 LLM 整理阶段丢失。
 
 ### 缓存生命周期（强约束）
 

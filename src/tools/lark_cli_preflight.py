@@ -70,7 +70,7 @@ def _run_cli_check(args: list[str], command_name: str) -> None:
         )
 
     payload = _extract_cli_json(completed.stdout or "")
-    if payload is not None and not payload.get("ok", False):
+    if payload is not None and (payload.get("ok") is False or payload.get("error")):
         raise LarkCliPreflightError(
             _summarize_cli_failure(command_name, completed.stdout or "", completed.stderr or "", completed.returncode)
         )

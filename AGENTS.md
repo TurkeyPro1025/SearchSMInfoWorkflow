@@ -5,10 +5,10 @@
 ### 节点清单
 | 节点名 | 文件位置 | 类型 | 功能描述 | 分支逻辑 | 配置文件 |
 |-------|---------|------|---------|---------|---------|
-| search_tech_stocks | `nodes/search_tech_stocks_node.py` | task | 搜索存储芯片、半导体、新能源、AI算力、消费电子等科技股资讯（多关键词多查询） | - | - |
-| search_hk_internet | `nodes/search_hk_internet_node.py` | task | 搜索基金021378前十大重仓股资讯（腾讯/阿里/美团/小米/商汤/金蝶/快手/贝壳/京东健康/哔哩哔哩） | - | - |
-| search_commodities | `nodes/search_commodities_node.py` | task | 搜索稀土、石油、黄金、锂、铜等大宗商品资讯 | - | - |
-| search_market_events | `nodes/search_market_events_node.py` | task | 搜索A股震荡、全球市场联动、政策变动、黑天鹅等重大事件资讯 | - | - |
+| search_tech_stocks | `nodes/search_tech_stocks_node.py` | task | 搜索存储芯片、半导体、新能源、AI算力、CPO、消费电子等科技股资讯；先按当前 query 绑定关键词硬过滤，再去重 | - | - |
+| search_hk_internet | `nodes/search_hk_internet_node.py` | task | 搜索基金021378前十大重仓股资讯（腾讯/阿里/美团/小米/商汤/金蝶/快手/贝壳/京东健康/哔哩哔哩）；按当前 holding query 绑定别名硬过滤，再去重 | - | - |
+| search_commodities | `nodes/search_commodities_node.py` | task | 搜索稀土、石油、黄金、锂、铜等大宗商品资讯；先按当前 query 绑定关键词硬过滤，再去重 | - | - |
+| search_market_events | `nodes/search_market_events_node.py` | task | 搜索A股震荡、全球市场联动、政策变动、黑天鹅等重大事件资讯；先按当前 query 绑定关键词硬过滤，再去重 | - | - |
 | organize_news | `nodes/organize_news_node.py` | agent | 使用LLM按领域分类、去重、提炼结构化概述（原因/经过/结果/预测+准确率）、评估信息真实性 | - | `config/organize_news_llm_cfg.json` |
 | write_feishu | `nodes/write_feishu_node.py` | task | 将整理后资讯批量写入飞书多维表格 | - | - |
 
@@ -18,13 +18,14 @@
 ```
 START → cli_preflight ─┬→ search_tech_stocks ──┐
                        ├→ search_hk_internet ──┤
-                       ├→ search_commodities ──┼→ organize_news → write_feishu → END
+                       ├→ search_commodities ──┼→ organize_news（先写 search_news_cache）→ write_feishu → END
                        └→ search_market_events┘
 ```
 - `cli_preflight` 是硬门槛：先检查 `lark-cli` 脚手架状态、`lark-cli auth status` 的 user 登录态，以及 `lark-cli base +field-list --as user` 对目标 Base/Table 的只读权限
 - 只有 `cli_preflight` 通过，4 路搜索节点才允许启动；若预检失败，整个工作流立即终止，避免先消耗 Web Search/LLM 再在飞书写入阶段失败
-- 4路搜索节点从START并行触发
+- 4路搜索节点从START并行触发；每路在节点内先执行 query 级硬规则过滤，再按标题/链接去重
 - 4路搜索全部完成后汇聚到 organize_news
+- organize_news 在调用 LLM 前会先把 4 路原始搜索结果聚合写入 `src/storage/cache/search_news_cache.json`
 - organize_news 完成后进入 write_feishu
 
 ## 技能使用
@@ -37,6 +38,8 @@ START → cli_preflight ─┬→ search_tech_stocks ──┐
 |-----|------|-----|------|
 | base_token | str | 是 | 飞书多维表格的 base_token，供 `lark-cli base +...` 使用 |
 | table_id | str | 是 | 目标数据表 table_id，工作流只向现有表写入 |
+| search_time_mode | str | 否 | 搜索时间模式：`rolling_24h`（默认，过去24小时）/ `today`（北京时间今天）/ `date`（指定日期） |
+| search_target_date | str | 否 | 当 `search_time_mode=date` 时必填，格式 `YYYY-MM-DD`，按北京时间过滤 |
 
 ## 飞书多维表格写入约束
 节点 `write_feishu` 只负责把整理后的资讯写入用户指定的现有数据表：

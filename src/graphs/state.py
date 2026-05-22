@@ -19,6 +19,14 @@ class GlobalState(BaseModel):
         description="飞书 Base token；优先使用环境变量 FEISHU_BASE_TOKEN",
     )
     table_id: str = Field(default="", description="飞书多维表格的 table_id（CLI 写入必填）")
+    search_time_mode: str = Field(
+        default="rolling_24h",
+        description="搜索时间模式：rolling_24h（过去24小时）/ today（北京时间今天）/ date（指定日期）",
+    )
+    search_target_date: str = Field(
+        default="",
+        description="指定日期模式下的目标日期，格式 YYYY-MM-DD，仅在 search_time_mode=date 时生效",
+    )
     write_result: str = Field(default="", description="飞书写入结果信息")
 
 
@@ -34,6 +42,14 @@ class GraphInput(BaseModel):
         description="飞书 Base token；优先使用环境变量 FEISHU_BASE_TOKEN",
     )
     table_id: str = Field(default="", description="飞书多维表格的 table_id（CLI 写入必填）")
+    search_time_mode: str = Field(
+        default="rolling_24h",
+        description="搜索时间模式：rolling_24h（过去24小时）/ today（北京时间今天）/ date（指定日期）",
+    )
+    search_target_date: str = Field(
+        default="",
+        description="指定日期模式下的目标日期，格式 YYYY-MM-DD，仅在 search_time_mode=date 时生效",
+    )
 
 
 class GraphOutput(BaseModel):
@@ -49,8 +65,16 @@ class GraphOutput(BaseModel):
 # ==================== 搜索节点入参出参 ====================
 
 class SearchBaseInput(BaseModel):
-    """搜索节点基础输入（无需外部参数，搜索关键词内置）"""
-    pass
+    """搜索节点基础输入（搜索关键词内置，时间窗口由工作流入参控制）"""
+
+    search_time_mode: str = Field(
+        default="rolling_24h",
+        description="搜索时间模式：rolling_24h（过去24小时）/ today（北京时间今天）/ date（指定日期）",
+    )
+    search_target_date: str = Field(
+        default="",
+        description="指定日期模式下的目标日期，格式 YYYY-MM-DD，仅在 search_time_mode=date 时生效",
+    )
 
 
 class SearchTechStocksOutput(BaseModel):

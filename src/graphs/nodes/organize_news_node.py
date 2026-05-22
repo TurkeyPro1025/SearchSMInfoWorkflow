@@ -12,6 +12,7 @@ from langgraph.runtime import Runtime
 from langchain_openai import ChatOpenAI
 from graphs.state import OrganizeNewsInput, OrganizeNewsOutput
 from storage.cache.organized_news_cache import clear_organized_news_cache, save_organized_news_cache
+from storage.cache.search_news_cache import clear_search_news_cache, save_search_news_cache
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,27 @@ CATALYST_KEYWORDS: Dict[str, tuple[str, ...]] = {
     "需求销量": ("需求", "销量", "订单", "出货", "装机", "消费"),
     "资金估值": ("资金", "估值", "北向", "两融", "回流"),
     "地缘宏观": ("地缘", "美联储", "cpi", "非农", "避险", "宏观"),
+}
+
+POLARITY_RULES: Dict[str, tuple[str, ...]] = {
+    "好": ("利好", "受益", "改善", "增长", "反弹", "修复", "扩张", "回暖", "支撑"),
+    "坏": ("利空", "承压", "恶化", "下跌", "跳水", "告破", "失守", "回调", "走弱"),
+}
+
+BENEFICIARY_RULES: Dict[str, tuple[str, ...]] = {
+    "上游资源": ("锂矿", "盐湖", "矿企", "资源端", "上游"),
+    "中游材料": ("正极", "负极", "电解液", "隔膜", "材料厂", "中游"),
+    "电池制造": ("电池", "pack", "电芯", "储能电池", "动力电池"),
+    "整车终端": ("整车", "车企", "新能源车", "终端", "消费端"),
+    "芯片设计": ("芯片设计", "fabless", "设计公司", "ip", "soc"),
+    "晶圆制造": ("晶圆", "代工", "制造厂", "foundry", "wafer"),
+    "封测设备": ("封测", "设备", "量测", "检测", "刻蚀", "光刻", "薄膜"),
+    "云与算力": ("云业务", "数据中心", "gpu", "算力", "服务器", "液冷"),
+    "平台广告": ("广告", "电商", "平台", "商家", "用户增长", "gmv"),
+    "本地生活": ("外卖", "到店", "闪购", "酒旅", "本地生活"),
+    "宏观流动性": ("降准", "降息", "流动性", "信用", "融资", "利率"),
+    "权益市场": ("a股", "港股", "指数", "etf", "北向资金", "南向资金", "板块"),
+    "债汇商品": ("美债", "收益率", "汇率", "美元", "黄金", "原油", "避险"),
 }
 
 
@@ -150,6 +172,79 @@ def _detect_primary_catalyst(text: str) -> str:
     return "未识别催化"
 
 
+def _detect_event_polarity(text: str) -> str:
+    lowered = text.lower()
+    scores = {
+        polarity: sum(keyword.lower() in lowered for keyword in keywords)
+        for polarity, keywords in POLARITY_RULES.items()
+    }
+    if scores["好"] == scores["坏"]:
+        return "未识别方向"
+    return "好" if scores["好"] > scores["坏"] else "坏"
+
+
+def _detect_beneficiary_chain(text: str) -> str:
+    lowered = text.lower()
+    for beneficiary, keywords in BENEFICIARY_RULES.items():
+        if any(keyword.lower() in lowered for keyword in keywords):
+            return beneficiary
+    return "未识别受益方"
+
+
+def _normalize_identity(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _build_event_signature(detail: Dict[str, str]) -> str:
+    return "|".join(
+        [
+            detail.get("date", "未知日期"),
+            detail.get("catalyst", "未识别催化"),
+            detail.get("polarity", "未识别方向"),
+            detail.get("beneficiary", "未识别受益方"),
+        ]
+    )
+
+
+def _group_event_records(category: str, items: List[Dict[str, Any]], *, output_mode: bool) -> Dict[str, Dict[str, Dict[str, str]]]:
+    records_by_anchor: Dict[str, Dict[str, Dict[str, str]]] = {}
+    title_index_by_anchor: Dict[str, Dict[str, str]] = {}
+    url_index_by_anchor: Dict[str, Dict[str, str]] = {}
+    signature_index_by_anchor: Dict[str, Dict[str, str]] = {}
+
+    for item in items:
+        detail = _build_event_item_detail(category, item)
+        anchor = detail["anchor"]
+        title_key = _normalize_identity(detail.get("title", ""))
+        url_key = _normalize_identity(detail.get("url", ""))
+        signature_key = _build_event_signature(detail)
+
+        if output_mode and anchor == "未识别主体":
+            logger.info("[organize_news] 输出校验存在未识别主体 category=%s title=%s", category, title_key)
+
+        anchor_records = records_by_anchor.setdefault(anchor, {})
+        title_index = title_index_by_anchor.setdefault(anchor, {})
+        url_index = url_index_by_anchor.setdefault(anchor, {})
+        signature_index = signature_index_by_anchor.setdefault(anchor, {})
+
+        event_id = ""
+        if url_key and url_key in url_index:
+            event_id = url_index[url_key]
+        elif title_key and title_key in title_index:
+            event_id = title_index[title_key]
+        else:
+            event_id = signature_index.get(signature_key, signature_key)
+
+        anchor_records.setdefault(event_id, detail)
+        if title_key:
+            title_index[title_key] = event_id
+        if url_key:
+            url_index[url_key] = event_id
+        signature_index[signature_key] = event_id
+
+    return records_by_anchor
+
+
 def _load_source_items(raw_text: str) -> List[Dict[str, Any]]:
     try:
         parsed = json.loads(raw_text)
@@ -175,46 +270,37 @@ def _build_event_item_detail(category: str, item: Dict[str, Any]) -> Dict[str, s
         "date": _extract_event_date(publish_date or text),
         "catalyst": _detect_primary_catalyst(text),
         "anchor": _detect_anchor(category, text, fallback=industry),
+        "polarity": _detect_event_polarity(text),
+        "beneficiary": _detect_beneficiary_chain(text),
         "url": url,
     }
 
 
+def _build_source_payloads(state: OrganizeNewsInput) -> Dict[str, str]:
+    return {
+        "科技股": state.tech_stocks_news,
+        "港股基金021378持仓": state.hk_internet_news,
+        "大宗商品": state.commodities_news,
+        "市场震荡": state.market_events_news,
+    }
+
+
+def _build_search_news_cache_payload(state: OrganizeNewsInput) -> Dict[str, List[Dict[str, Any]]]:
+    return {
+        category: _load_source_items(raw_text)
+        for category, raw_text in _build_source_payloads(state).items()
+    }
+
 def _collect_event_records(category: str, items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Dict[str, str]]]:
-    records_by_anchor: Dict[str, Dict[str, Dict[str, str]]] = {}
-
-    for item in items:
-        detail = _build_event_item_detail(category, item)
-        anchor = detail["anchor"]
-        signature = f"{detail['date']}|{detail['catalyst']}"
-        records_by_anchor.setdefault(anchor, {})
-        records_by_anchor[anchor].setdefault(signature, detail)
-
-    return records_by_anchor
+    return _group_event_records(category, items, output_mode=False)
 
 
 def _collect_event_signatures(category: str, items: List[Dict[str, Any]], *, output_mode: bool) -> Dict[str, set[str]]:
-    signatures_by_anchor: Dict[str, set[str]] = {}
-
-    for item in items:
-        title = _normalize_text(item.get("title", ""))
-        snippet = _normalize_text(item.get("snippet", ""))
-        content = _normalize_text(item.get("content", ""))
-        summary = _normalize_text(item.get("summary", ""))
-        industry = _normalize_text(item.get("industry", ""))
-        publish_date = _normalize_text(item.get("publish_date", ""))
-
-        text = " ".join(part for part in [title, snippet, content, summary, industry] if part)
-        anchor = _detect_anchor(category, text, fallback=industry)
-        date_value = _extract_event_date(publish_date or text)
-        catalyst = _detect_primary_catalyst(text)
-        signature = f"{date_value}|{catalyst}"
-
-        signatures_by_anchor.setdefault(anchor, set()).add(signature)
-
-        if output_mode and anchor == "未识别主体":
-            logger.info("[organize_news] 输出校验存在未识别主体 category=%s title=%s", category, title)
-
-    return signatures_by_anchor
+    grouped_records = _group_event_records(category, items, output_mode=output_mode)
+    return {
+        anchor: set(records.keys())
+        for anchor, records in grouped_records.items()
+    }
 
 
 def _detect_potential_event_merge_issues(
@@ -265,6 +351,8 @@ def _detect_potential_event_merge_details(
                     "message": f"{category}/{anchor}: 输入识别到 {len(source_events)} 个不同事件信号，但输出仅保留 {output_event_count} 条，可能发生误合并",
                     "source_examples": source_examples,
                     "output_examples": output_examples,
+                    "source_polarities": sorted({example.get("polarity", "") for example in source_examples if example.get("polarity")}),
+                    "source_beneficiaries": sorted({example.get("beneficiary", "") for example in source_examples if example.get("beneficiary")}),
                 }
             )
 
@@ -296,10 +384,10 @@ def _compress_news_payload(raw_text: str, category: str) -> str:
         content = _truncate_text(_normalize_text(item.get("content", "")), MAX_CONTENT_CHARS)
         url = _normalize_text(item.get("url", ""))
 
-        dedupe_key = title or url
-        if not dedupe_key or dedupe_key in seen_keys:
+        dedupe_tokens = [token for token in (title, url) if token]
+        if not dedupe_tokens or any(token in seen_keys for token in dedupe_tokens):
             continue
-        seen_keys.add(dedupe_key)
+        seen_keys.update(dedupe_tokens)
 
         compact_item: Dict[str, Any] = {
             "title": title,
@@ -405,6 +493,14 @@ def organize_news_node(
     temperature: float = llm_config.get("temperature", 0.1)
     max_completion_tokens: int = llm_config.get("max_completion_tokens", 8192)
 
+    try:
+        clear_search_news_cache()
+        logger.info("[organize_news] 写入新搜索结果前已清空旧缓存内容")
+        search_cache_path = save_search_news_cache(_build_search_news_cache_payload(state))
+        logger.info("[organize_news] 已写入搜索结果缓存: %s", search_cache_path)
+    except Exception as e:
+        logger.warning("[organize_news] 写入搜索结果缓存失败: %s", e)
+
     # 渲染用户提示词
     compact_inputs = _build_compact_inputs(state)
     up_tpl = Template(up)
@@ -430,14 +526,19 @@ def organize_news_node(
         merge_issue_details = _detect_potential_event_merge_details(state, organized_news)
         for issue in merge_issue_details:
             source_examples = issue.get("source_examples", []) if isinstance(issue, dict) else []
+            output_examples = issue.get("output_examples", []) if isinstance(issue, dict) else []
             titles = [example.get("title", "") for example in source_examples if isinstance(example, dict) and example.get("title")]
+            output_titles = [example.get("title", "") for example in output_examples if isinstance(example, dict) and example.get("title")]
             if len(titles) >= 2:
                 logger.warning(
-                    "[organize_news] 潜在误合并提醒: 领域=%s 主体=%s 标题1=%s 标题2=%s",
+                    "[organize_news] 潜在误合并提醒: 领域=%s 主体=%s 输入标题1=%s 输入标题2=%s 输出保留=%s 输入方向=%s 输入受益方=%s",
                     issue.get("category", ""),
                     issue.get("anchor", ""),
                     titles[0],
                     titles[1],
+                    output_titles[0] if output_titles else "",
+                    "/".join(issue.get("source_polarities", [])),
+                    "/".join(issue.get("source_beneficiaries", [])),
                 )
             else:
                 logger.warning("[organize_news] 输出后校验发现潜在误合并: %s", issue.get("message", issue))

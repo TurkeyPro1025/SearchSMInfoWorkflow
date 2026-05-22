@@ -13,12 +13,20 @@ FallbackSearchClient: 多供应商搜索客户端，按优先级回退。
 import json
 import logging
 import os
+import re
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+try:
+    BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+except ZoneInfoNotFoundError:
+    BEIJING_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 COOLDOWN = 24 * 3600  # 配额耗尽后冷却时间（秒）
 _QUOTA_STATE_FILE = os.path.join(
@@ -30,11 +38,212 @@ class QuotaExhaustedError(Exception):
     pass
 
 
+def _normalize_identity(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+_ABSOLUTE_DATE_PATTERNS = [
+    re.compile(r"(20\d{2})-(\d{1,2})-(\d{1,2})"),
+    re.compile(r"(20\d{2})/(\d{1,2})/(\d{1,2})"),
+    re.compile(r"(20\d{2})\.(\d{1,2})\.(\d{1,2})"),
+    re.compile(r"(20\d{2})年(\d{1,2})月(\d{1,2})日"),
+]
+
+
+def _today_date_str() -> str:
+    return datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
+
+
+def _now_beijing() -> datetime:
+    return datetime.now(BEIJING_TZ)
+
+
+def _normalize_absolute_date(match: re.Match[str]) -> str:
+    year, month, day = match.groups()
+    return f"{int(year):04d}-{int(month):02d}-{int(day):02d}"
+
+
+def _extract_publish_datetime(*values: Any) -> datetime | None:
+    now = _now_beijing()
+
+    for value in values:
+        text = _normalize_identity(value)
+        if not text:
+            continue
+
+        lowered = text.lower()
+        if any(token in lowered for token in ["刚刚", "今天", "today"]):
+            return now
+
+        minute_match = re.search(r"(\d+)\s*(分钟前|minutes ago|minute ago)", lowered)
+        if minute_match:
+            return now - timedelta(minutes=int(minute_match.group(1)))
+
+        hour_match = re.search(r"(\d+)\s*(小时前|hours ago|hour ago)", lowered)
+        if hour_match:
+            return now - timedelta(hours=int(hour_match.group(1)))
+
+        day_match = re.search(r"(\d+)\s*(天前|days ago|day ago)", lowered)
+        if day_match:
+            return now - timedelta(days=int(day_match.group(1)))
+
+        iso_datetime = text[:19]
+        if re.fullmatch(r"20\d{2}-\d{2}-\d{2}[tT ]\d{2}:\d{2}:\d{2}", iso_datetime):
+            try:
+                return datetime.fromisoformat(iso_datetime.replace("Z", "+00:00")).astimezone(BEIJING_TZ)
+            except ValueError:
+                pass
+
+        iso_candidate = text[:10]
+        if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", iso_candidate):
+            try:
+                return datetime.strptime(iso_candidate, "%Y-%m-%d").replace(tzinfo=BEIJING_TZ)
+            except ValueError:
+                continue
+
+        rss_match = re.search(r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(20\d{2})\s+(\d{2}:\d{2}:\d{2})\s+GMT", text, re.IGNORECASE)
+        if rss_match:
+            try:
+                parsed = datetime.strptime(rss_match.group(0), "%a, %d %b %Y %H:%M:%S GMT")
+                return parsed.replace(tzinfo=timezone.utc).astimezone(BEIJING_TZ)
+            except ValueError:
+                pass
+
+        for pattern in _ABSOLUTE_DATE_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                normalized = _normalize_absolute_date(match)
+                try:
+                    return datetime.strptime(normalized, "%Y-%m-%d").replace(tzinfo=BEIJING_TZ)
+                except ValueError:
+                    continue
+
+    return None
+
+
+def _normalize_publish_date(item: dict[str, Any], publish_dt: datetime) -> dict[str, Any]:
+    normalized_item = dict(item)
+    normalized_item["publish_date"] = publish_dt.strftime("%Y-%m-%d")
+    return normalized_item
+
+
+def _keep_unknown_date_item(item: dict[str, Any]) -> dict[str, Any]:
+    normalized_item = dict(item)
+    normalized_item.setdefault("publish_date", "")
+    return normalized_item
+
+
+def _keep_today_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    today = _today_date_str()
+    filtered_results: list[dict[str, Any]] = []
+
+    for item in results:
+        publish_dt = _extract_publish_datetime(
+            item.get("publish_date", ""),
+            item.get("title", ""),
+            item.get("snippet", ""),
+            item.get("content", ""),
+        )
+        if publish_dt is None:
+            filtered_results.append(_keep_unknown_date_item(item))
+            continue
+        if publish_dt.strftime("%Y-%m-%d") != today:
+            continue
+
+        filtered_results.append(_normalize_publish_date(item, publish_dt))
+
+    return filtered_results
+
+
+def _keep_last_24h_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    now = _now_beijing()
+    window_start = now - timedelta(hours=24)
+    filtered_results: list[dict[str, Any]] = []
+
+    for item in results:
+        publish_dt = _extract_publish_datetime(
+            item.get("publish_date", ""),
+            item.get("title", ""),
+            item.get("snippet", ""),
+            item.get("content", ""),
+        )
+        if publish_dt is None:
+            filtered_results.append(_keep_unknown_date_item(item))
+            continue
+        if publish_dt < window_start or publish_dt > now:
+            continue
+
+        filtered_results.append(_normalize_publish_date(item, publish_dt))
+
+    return filtered_results
+
+
+def _keep_target_date_results(results: list[dict[str, Any]], target_date: str) -> list[dict[str, Any]]:
+    filtered_results: list[dict[str, Any]] = []
+
+    for item in results:
+        publish_dt = _extract_publish_datetime(
+            item.get("publish_date", ""),
+            item.get("title", ""),
+            item.get("snippet", ""),
+            item.get("content", ""),
+        )
+        if publish_dt is None:
+            logger.warning("[search] 指定日期模式丢弃无可解析发布时间的结果: %s", item.get("title", ""))
+            continue
+        if publish_dt.strftime("%Y-%m-%d") != target_date:
+            continue
+
+        filtered_results.append(_normalize_publish_date(item, publish_dt))
+
+    return filtered_results
+
+
+def _apply_time_filter(
+    results: list[dict[str, Any]],
+    time_mode: str,
+    target_date: str = "",
+) -> list[dict[str, Any]]:
+    if time_mode == "today":
+        return _keep_today_results(results)
+    if time_mode == "date":
+        return _keep_target_date_results(results, target_date)
+    return _keep_last_24h_results(results)
+
+
+def _build_query(query: str, time_mode: str, target_date: str = "") -> str:
+    if time_mode == "date" and target_date:
+        return f"{query} {target_date}"
+
+    return query
+
+
+def append_unique_search_results(
+    target_results: list[dict[str, Any]],
+    new_items: list[dict[str, Any]],
+    *,
+    seen_titles: set[str],
+    seen_urls: set[str],
+) -> None:
+    for item in new_items:
+        title = _normalize_identity(item.get("title", ""))
+        url = _normalize_identity(item.get("url", ""))
+
+        if (title and title in seen_titles) or (url and url in seen_urls):
+            continue
+
+        if title:
+            seen_titles.add(title)
+        if url:
+            seen_urls.add(url)
+        target_results.append(item)
+
+
 class SerperSearchProvider:
     """Google Serper API（支持 qdr:h 小时级时间过滤，中文源友好）"""
 
     def search(self, query: str, count: int, time_range: str) -> list[dict[str, Any]]:
-        tbs = "qdr:h" if time_range == "1h" else "qdr:d"
+        tbs = "qdr:h" if time_range == "rolling_24h" else "qdr:d"
         resp = requests.post(
             "https://google.serper.dev/news",
             headers={"X-API-KEY": os.environ["SERPER_API_KEY"], "Content-Type": "application/json"},
@@ -50,6 +259,7 @@ class SerperSearchProvider:
                 "url": v.get("link", ""),
                 "snippet": v.get("snippet", ""),
                 "content": "",
+                "publish_date": v.get("date", ""),
             }
             for v in resp.json().get("news", [])
         ]
@@ -74,6 +284,7 @@ class BingSearchProvider:
                 "url": v.get("url", ""),
                 "snippet": v.get("description", ""),
                 "content": "",
+                "publish_date": v.get("datePublished", ""),
             }
             for v in resp.json().get("value", [])
         ]
@@ -101,6 +312,7 @@ class BraveSearchProvider:
                 "url": v.get("url", ""),
                 "snippet": v.get("description", ""),
                 "content": "",
+                "publish_date": v.get("page_age") or v.get("age", ""),
             }
             for v in resp.json().get("results", [])
         ]
@@ -131,6 +343,9 @@ class GoogleCSESearchProvider:
                 "url": v.get("link", ""),
                 "snippet": v.get("snippet", ""),
                 "content": "",
+                "publish_date": (
+                    v.get("pagemap", {}).get("metatags", [{}])[0].get("article:published_time", "") if isinstance(v.get("pagemap", {}).get("metatags", []), list) and v.get("pagemap", {}).get("metatags", []) else "",
+                ),
             }
             for v in resp.json().get("items", [])
         ]
@@ -161,19 +376,34 @@ class FallbackSearchClient:
         self._state: dict[str, float] = self._load_state()
 
     def search(
-        self, query: str, count: int = 10, time_range: str = "1d"
+        self,
+        query: str,
+        count: int = 10,
+        time_range: str = "rolling_24h",
+        target_date: str = "",
     ) -> list[dict[str, Any]]:
         """
-        执行搜索，返回 list[dict]，每项包含: title, url, snippet, content
+        执行搜索，返回 list[dict]，每项包含: title, url, snippet, content, publish_date。
+        默认仅保留过去24小时结果；支持北京时间今天和指定日期过滤。
         """
+        provider_query = _build_query(query, time_range, target_date)
         for name, provider in self._providers:
             if time.time() - self._state.get(name, 0) < COOLDOWN:
                 logger.debug("[search] %s 冷却中，跳过", name)
                 continue
             try:
-                results = provider.search(query, count, time_range)
-                logger.debug("[search] %s 返回 %d 条结果: %s", name, len(results), query)
-                return results
+                results = provider.search(provider_query, count, time_range)
+                filtered_results = _apply_time_filter(results, time_range, target_date)
+                logger.info(
+                    "[search] provider=%s query=%s time_mode=%s target_date=%s raw_results=%d filtered_results=%d",
+                    name,
+                    provider_query,
+                    time_range,
+                    target_date or "-",
+                    len(results),
+                    len(filtered_results),
+                )
+                return filtered_results
             except QuotaExhaustedError as e:
                 logger.warning("[search] %s 配额耗尽 (%s)，切换下一供应商", name, e)
                 self._state[name] = time.time()
