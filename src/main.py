@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 import uuid
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Dict
 
 from tools.lark_cli_preflight import LarkCliPreflightError, ensure_lark_cli_preflight
@@ -23,6 +25,12 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _json_ready(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    return value
 
 
 def _preflight_payload(payload: Dict[str, Any]) -> None:
@@ -109,15 +117,93 @@ class GraphService:
             yield f"data: {json.dumps(error, ensure_ascii=False)}\n\n"
 
     async def run_node(self, node_id: str, payload: Dict[str, Any]) -> Any:
+        runtime_stub = SimpleNamespace(context=None)
+
+        if node_id == "search_tech_stocks":
+            from graphs.nodes.search_tech_stocks_node import search_tech_stocks_node
+            from graphs.state import SearchBaseInput
+
+            node_input = SearchBaseInput(**payload)
+            return search_tech_stocks_node(node_input, {}, runtime_stub)
+
+        if node_id == "search_hk_internet":
+            from graphs.nodes.search_hk_internet_node import search_hk_internet_node
+            from graphs.state import SearchBaseInput
+
+            node_input = SearchBaseInput(**payload)
+            return search_hk_internet_node(node_input, {}, runtime_stub)
+
+        if node_id == "search_commodities":
+            from graphs.nodes.search_commodities_node import search_commodities_node
+            from graphs.state import SearchBaseInput
+
+            node_input = SearchBaseInput(**payload)
+            return search_commodities_node(node_input, {}, runtime_stub)
+
+        if node_id == "search_market_events":
+            from graphs.nodes.search_market_events_node import search_market_events_node
+            from graphs.state import SearchBaseInput
+
+            node_input = SearchBaseInput(**payload)
+            return search_market_events_node(node_input, {}, runtime_stub)
+
+        if node_id == "organize_news":
+            from graphs.nodes.organize_news_node import organize_news_node
+            from graphs.state import OrganizeNewsInput
+
+            organize_payload = self._hydrate_organize_payload(payload)
+            node_input = OrganizeNewsInput(**organize_payload)
+            return organize_news_node(
+                node_input,
+                {"metadata": {"llm_cfg": "config/organize_news_llm_cfg.json"}},
+                runtime_stub,
+            )
+
         if node_id == "write_feishu":
             _preflight_payload(payload)
             from graphs.nodes.write_feishu_node import write_feishu_node
             from graphs.state import WriteFeishuInput
 
             node_input = WriteFeishuInput(**payload)
-            return write_feishu_node(node_input, {}, None)
+            return write_feishu_node(node_input, {}, runtime_stub)
 
         raise NotImplementedError(f"单节点运行暂未实现: {node_id}")
+
+    def _hydrate_organize_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if any(
+            payload.get(key)
+            for key in ("tech_stocks_news", "hk_internet_news", "commodities_news", "market_events_news")
+        ):
+            return payload
+
+        cache_path = Path(__file__).resolve().parent / "storage" / "cache" / "search_news_cache.json"
+        if not cache_path.exists():
+            return payload
+
+        try:
+            cache_data = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return payload
+
+        search_news = cache_data.get("search_news", {}) if isinstance(cache_data, dict) else {}
+        if not isinstance(search_news, dict):
+            return payload
+
+        hydrated = dict(payload)
+        field_map = {
+            "科技股": "tech_stocks_news",
+            "港股基金021378持仓": "hk_internet_news",
+            "大宗商品": "commodities_news",
+            "市场震荡": "market_events_news",
+        }
+        for category, field_name in field_map.items():
+            if hydrated.get(field_name):
+                continue
+            items = search_news.get(category, [])
+            if isinstance(items, list):
+                hydrated[field_name] = json.dumps(items, ensure_ascii=False, indent=2)
+
+        return hydrated
 
 
 service = GraphService()
@@ -251,9 +337,9 @@ if __name__ == "__main__":
         start_http_server(args.p)
     elif args.m == "flow":
         result = asyncio.run(service.run(parse_input(args.i)))
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(_json_ready(result), ensure_ascii=False, indent=2))
     elif args.m == "node" and args.n:
         result = asyncio.run(service.run_node(args.n, parse_input(args.i)))
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(json.dumps(_json_ready(result), ensure_ascii=False, indent=2))
     else:
         print("Usage: python src/main.py -m [http|flow|node] [-i input_json] [-p port] [-n node_id]")

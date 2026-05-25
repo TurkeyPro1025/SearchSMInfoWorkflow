@@ -469,6 +469,31 @@ def _invoke_organize_llm(
         return {"raw_data": raw_text}, raw_text
 
 
+def _build_merge_retry_prompt(issue_details: List[Dict[str, Any]]) -> str:
+    lines = [
+        "上一次输出存在疑似误合并/误省略。请仅基于原始输入重新整理，并严格保留这些主体下的不同事件。",
+        "除标题相同、链接相同或明确为同一新闻转载外，不得合并。若无法确认是否重复，默认分别保留。",
+    ]
+
+    for issue in issue_details:
+        if not isinstance(issue, dict):
+            continue
+
+        category = issue.get("category", "")
+        anchor = issue.get("anchor", "")
+        source_count = len(issue.get("source_examples", []) or [])
+        output_count = len(issue.get("output_examples", []) or [])
+        lines.append(
+            f"- 领域={category} 主体={anchor} 输入至少识别到 {source_count or 2} 条不同事件，上一轮仅保留 {output_count} 条。"
+        )
+        for example in issue.get("source_examples", []) or []:
+            if isinstance(example, dict) and example.get("title"):
+                lines.append(f"  输入标题：{example['title']}")
+
+    lines.append("重新输出完整 JSON，禁止附加解释文字。")
+    return "\n".join(lines)
+
+
 def organize_news_node(
     state: OrganizeNewsInput, config: RunnableConfig, runtime: Runtime[Any]
 ) -> OrganizeNewsOutput:
@@ -524,6 +549,22 @@ def organize_news_node(
 
     if "raw_data" not in organized_news:
         merge_issue_details = _detect_potential_event_merge_details(state, organized_news)
+        if merge_issue_details:
+            retry_prompt = _build_merge_retry_prompt(merge_issue_details)
+            logger.warning("[organize_news] 检测到潜在误合并，追加一次定向重试，问题数=%d", len(merge_issue_details))
+            retried_news, retried_raw_text = _invoke_organize_llm(
+                llm,
+                sp,
+                f"{user_prompt}\n\n【纠偏要求】\n{retry_prompt}",
+            )
+            if "raw_data" not in retried_news:
+                retried_issues = _detect_potential_event_merge_details(state, retried_news)
+                if len(retried_issues) < len(merge_issue_details):
+                    organized_news = retried_news
+                    raw_text = retried_raw_text
+                    merge_issue_details = retried_issues
+                    logger.info("[organize_news] 定向重试后误合并问题减少: %d -> %d", len(_detect_potential_event_merge_details(state, organized_news)), len(merge_issue_details))
+
         for issue in merge_issue_details:
             source_examples = issue.get("source_examples", []) if isinstance(issue, dict) else []
             output_examples = issue.get("output_examples", []) if isinstance(issue, dict) else []
